@@ -9,15 +9,18 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type LogEntry struct {
 	Timestamp string `json:"timestamp"`
+	RequestID string `json:"requestId"`
 	Message   struct {
+		ID    string `json:"id"`
 		Model string `json:"model"`
 		Usage struct {
-			InputTokens       int `json:"input_tokens"`
-			OutputTokens      int `json:"output_tokens"`
+			InputTokens         int `json:"input_tokens"`
+			OutputTokens        int `json:"output_tokens"`
 			CacheCreationTokens int `json:"cache_creation_input_tokens"`
 			CacheReadTokens     int `json:"cache_read_input_tokens"`
 		} `json:"usage"`
@@ -65,7 +68,17 @@ func findJSONLFiles(dir string) []string {
 	return files
 }
 
-func processFile(path string, dayUsage map[string]*DayUsage) {
+// EntryData stores parsed entry info for deduplication
+type EntryData struct {
+	Date                string
+	Model               string
+	InputTokens         int
+	OutputTokens        int
+	CacheCreationTokens int
+	CacheReadTokens     int
+}
+
+func processFile(path string, entries map[string]*EntryData) {
 	f, err := os.Open(path)
 	if err != nil {
 		return
@@ -84,22 +97,54 @@ func processFile(path string, dayUsage map[string]*DayUsage) {
 		if entry.Timestamp == "" || (entry.Message.Usage.InputTokens == 0 && entry.Message.Usage.OutputTokens == 0) {
 			continue
 		}
-		date := entry.Timestamp[:10]
+
+		// Build dedup key from message.id + requestId
+		// Streaming creates multiple entries with cumulative output tokens - keep the last/max
+		if entry.Message.ID == "" || entry.RequestID == "" {
+			continue // Skip entries we can't deduplicate
+		}
+		key := entry.Message.ID + ":" + entry.RequestID
+
+		// Parse timestamp and convert to local date (ccusage uses timezone conversion)
+		t, err := time.Parse(time.RFC3339, entry.Timestamp)
+		if err != nil {
+			continue
+		}
+		date := t.Local().Format("2006-01-02")
 		model := entry.Message.Model
 		if model == "" {
 			model = "unknown"
 		}
-		if dayUsage[date] == nil {
-			dayUsage[date] = &DayUsage{Models: make(map[string]*Usage)}
+
+		// Keep first entry seen for each unique key (ccusage behavior)
+		if entries[key] == nil {
+			entries[key] = &EntryData{
+				Date:                date,
+				Model:               model,
+				InputTokens:         entry.Message.Usage.InputTokens,
+				OutputTokens:        entry.Message.Usage.OutputTokens,
+				CacheCreationTokens: entry.Message.Usage.CacheCreationTokens,
+				CacheReadTokens:     entry.Message.Usage.CacheReadTokens,
+			}
 		}
-		if dayUsage[date].Models[model] == nil {
-			dayUsage[date].Models[model] = &Usage{}
-		}
-		dayUsage[date].Models[model].Input += entry.Message.Usage.InputTokens
-		dayUsage[date].Models[model].Output += entry.Message.Usage.OutputTokens
-		dayUsage[date].Models[model].CacheWrite += entry.Message.Usage.CacheCreationTokens
-		dayUsage[date].Models[model].CacheRead += entry.Message.Usage.CacheReadTokens
 	}
+}
+
+func aggregateUsage(entries map[string]*EntryData) map[string]*DayUsage {
+	dayUsage := make(map[string]*DayUsage)
+	for _, e := range entries {
+		if dayUsage[e.Date] == nil {
+			dayUsage[e.Date] = &DayUsage{Models: make(map[string]*Usage)}
+		}
+		if dayUsage[e.Date].Models[e.Model] == nil {
+			dayUsage[e.Date].Models[e.Model] = &Usage{}
+		}
+		dayUsage[e.Date].Models[e.Model].Input += e.InputTokens
+		dayUsage[e.Date].Models[e.Model].Output += e.OutputTokens
+		dayUsage[e.Date].Models[e.Model].CacheWrite += e.CacheCreationTokens
+		dayUsage[e.Date].Models[e.Model].CacheRead += e.CacheReadTokens
+	}
+	return dayUsage
 }
 
 func loadPricing(path string) (map[string]ModelPricing, error) {
@@ -207,10 +252,11 @@ func main() {
 	configDir := getConfigDir()
 	files := findJSONLFiles(filepath.Join(configDir, "projects"))
 
-	dayUsage := make(map[string]*DayUsage)
+	entries := make(map[string]*EntryData)
 	for _, f := range files {
-		processFile(f, dayUsage)
+		processFile(f, entries)
 	}
 
+	dayUsage := aggregateUsage(entries)
 	printTable(dayUsage, pricing)
 }
