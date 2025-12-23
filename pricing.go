@@ -1,7 +1,7 @@
 package main
 
 // Model pricing (per million tokens, USD)
-// See: https://claude.com/pricing
+// See: https://platform.claude.com/docs/en/about-claude/pricing
 
 var modelPricing = map[string]ModelPricing{
 	// Default pricing (used for unknown models)
