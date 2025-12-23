@@ -2,11 +2,21 @@
 
 Minimal Claude Code usage tracker. Parses local JSONL logs and outputs a daily cost table.
 
+## Install
+
+```bash
+go install github.com/abatilo/ccusage-go@latest
+ccusage-go
+```
+
 ## Usage
 
 ```bash
-go build .
-./ccusage-go
+# Run without installing
+go run github.com/abatilo/ccusage-go@latest
+
+# Or with go tool (Go 1.24+)
+go tool github.com/abatilo/ccusage-go@latest
 ```
 
 ## Example Output
