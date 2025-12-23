@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -304,54 +303,6 @@ func aggregateUsage(entries map[string]*EntryData) map[string]*DayUsage {
 	return dayUsage
 }
 
-func loadPricing(path string) (map[string]ModelPricing, error) {
-	pricing := make(map[string]ModelPricing)
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = f.Close() }()
-
-	var currentModel string
-	var current ModelPricing
-	scanner := bufio.NewScanner(f)
-
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		if strings.HasPrefix(line, "[models.") && strings.HasSuffix(line, "]") {
-			if currentModel != "" {
-				pricing[currentModel] = current
-			}
-			currentModel = strings.TrimSuffix(strings.TrimPrefix(line, "[models."), "]")
-			current = ModelPricing{}
-			continue
-		}
-		parts := strings.SplitN(line, "=", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		key := strings.TrimSpace(parts[0])
-		val, _ := strconv.ParseFloat(strings.TrimSpace(parts[1]), 64)
-		switch key {
-		case "input":
-			current.Input = val
-		case "output":
-			current.Output = val
-		case "cache_write":
-			current.CacheWrite = val
-		case "cache_read":
-			current.CacheRead = val
-		}
-	}
-	if currentModel != "" {
-		pricing[currentModel] = current
-	}
-	return pricing, nil
-}
-
 func calculateCost(day *DayUsage, pricing map[string]ModelPricing) float64 {
 	var total float64
 	for model, usage := range day.Models {
@@ -407,17 +358,8 @@ func main() {
 
 	totalStart := time.Now()
 
-	// Phase 1: Load pricing
+	// Phase 1: Find files
 	start := time.Now()
-	pricing, err := loadPricing("pricing.toml")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error loading pricing.toml: %v\n", err)
-		os.Exit(1)
-	}
-	pricingDuration := time.Since(start)
-
-	// Phase 2: Find files
-	start = time.Now()
 	configDir := getConfigDir()
 	files := findJSONLFiles(filepath.Join(configDir, "projects"))
 	findDuration := time.Since(start)
@@ -434,12 +376,11 @@ func main() {
 
 	// Phase 5: Print table
 	start = time.Now()
-	printTable(dayUsage, pricing)
+	printTable(dayUsage, modelPricing)
 	printDuration := time.Since(start)
 
 	if *verbose {
 		fmt.Fprintf(os.Stderr, "\n--- Timing ---\n")
-		fmt.Fprintf(os.Stderr, "Load pricing:   %v\n", pricingDuration)
 		fmt.Fprintf(os.Stderr, "Find files:     %v (%d files)\n", findDuration, len(files))
 		fmt.Fprintf(os.Stderr, "Process files:  %v (cache: %d hits, %d misses, %d lines parsed, %d unique)\n",
 			processDuration, cStats.hits, cStats.misses, cStats.totalLines, cStats.totalNew)
