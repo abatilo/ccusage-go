@@ -32,3 +32,7 @@ Total                   3,869,001           405,744       158,286,494     2,002,
 - `-v` - verbose timing output
 - `--no-cache` - skip cache, reparse all files
 - `--clear-cache` - delete cache and rebuild
+
+## Credits
+
+Inspired by [ryoppippi/ccusage](https://github.com/ryoppippi/ccusage)
