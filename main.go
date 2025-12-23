@@ -328,6 +328,21 @@ func sumUsage(day *DayUsage) (input, output, cacheWrite, cacheRead int) {
 	return
 }
 
+func formatNumber(n int) string {
+	s := fmt.Sprintf("%d", n)
+	if len(s) <= 3 {
+		return s
+	}
+	var result []byte
+	for i, c := range s {
+		if i > 0 && (len(s)-i)%3 == 0 {
+			result = append(result, ',')
+		}
+		result = append(result, byte(c))
+	}
+	return string(result)
+}
+
 func printTable(dayUsage map[string]*DayUsage, pricing map[string]ModelPricing) {
 	var dates []string
 	for d := range dayUsage {
@@ -335,19 +350,38 @@ func printTable(dayUsage map[string]*DayUsage, pricing map[string]ModelPricing) 
 	}
 	sort.Strings(dates)
 
-	fmt.Printf("%-12s %12s %12s %12s %12s %10s %10s\n",
-		"Date", "Input", "Output", "CacheWrite", "CacheRead", "Cost", "Total")
-	fmt.Println(strings.Repeat("-", 82))
+	fmt.Printf("%-15s %17s %17s %17s %17s %15s\n",
+		"Date", "Input", "Output", "CacheWrite", "CacheRead", "Cost")
+	fmt.Println(strings.Repeat("-", 103))
 
-	var runningTotal float64
+	var totalInput, totalOutput, totalCacheWrite, totalCacheRead int
+	var totalCost float64
 	for _, date := range dates {
 		day := dayUsage[date]
 		input, output, cacheWrite, cacheRead := sumUsage(day)
 		cost := calculateCost(day, pricing)
-		runningTotal += cost
-		fmt.Printf("%-12s %12d %12d %12d %12d %10.2f %10.2f\n",
-			date, input, output, cacheWrite, cacheRead, cost, runningTotal)
+		totalInput += input
+		totalOutput += output
+		totalCacheWrite += cacheWrite
+		totalCacheRead += cacheRead
+		totalCost += cost
+		fmt.Printf("%-15s %17s %17s %17s %17s %15s\n",
+			date,
+			formatNumber(input),
+			formatNumber(output),
+			formatNumber(cacheWrite),
+			formatNumber(cacheRead),
+			fmt.Sprintf("$%.2f", cost))
 	}
+
+	fmt.Println(strings.Repeat("-", 103))
+	fmt.Printf("%-15s %17s %17s %17s %17s %15s\n",
+		"Total",
+		formatNumber(totalInput),
+		formatNumber(totalOutput),
+		formatNumber(totalCacheWrite),
+		formatNumber(totalCacheRead),
+		fmt.Sprintf("$%.2f", totalCost))
 }
 
 func main() {

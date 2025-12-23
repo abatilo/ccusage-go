@@ -36,7 +36,7 @@ Stdlib only. Flow:
 2. `processWithCache()` - check cache, parse changed files
 3. `aggregateUsage()` - group by date and model
 4. `calculateCost()` - apply model pricing from `pricing.go`
-5. `printTable()` - output with running total
+5. `printTable()` - output daily rows with total row at bottom
 
 ## Development
 
