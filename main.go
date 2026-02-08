@@ -2,6 +2,9 @@ package main
 
 import (
 	"bufio"
+	"bytes"
+	"encoding/binary"
+	"encoding/gob"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -59,15 +62,160 @@ func getConfigDir() string {
 	return filepath.Join(home, ".claude")
 }
 
-func findJSONLFiles(dir string) []string {
-	var files []string
+// fullWalkJSONL does a full filesystem walk, collecting both JSONL files and directory mtimes.
+func fullWalkJSONL(dir string) (files []string, dirs map[string]int64) {
+	dirs = make(map[string]int64)
 	_ = filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
-		if err == nil && !d.IsDir() && strings.HasSuffix(path, ".jsonl") {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			info, infoErr := d.Info()
+			if infoErr == nil {
+				dirs[path] = info.ModTime().UnixNano()
+			}
+			return nil
+		}
+		if strings.HasSuffix(path, ".jsonl") {
 			files = append(files, path)
 		}
 		return nil
 	})
-	return files
+	return
+}
+
+// walkSubtree walks a single directory subtree and collects JSONL files and dir mtimes.
+func walkSubtree(root string) (files []string, dirs map[string]int64) {
+	dirs = make(map[string]int64)
+	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			info, infoErr := d.Info()
+			if infoErr == nil {
+				dirs[path] = info.ModTime().UnixNano()
+			}
+			return nil
+		}
+		if strings.HasSuffix(path, ".jsonl") {
+			files = append(files, path)
+		}
+		return nil
+	})
+	return
+}
+
+const fullWalkInterval = 5 * time.Minute
+
+// findJSONLFiles discovers JSONL files using the directory manifest when available.
+// On cold start or when the safety interval has elapsed, it does a full walk.
+// On warm start, it stats known directories and only walks changed subtrees.
+func findJSONLFiles(dir string, cache *CacheFile) ([]string, discoveryStats) {
+	var dStats discoveryStats
+
+	// Cold start or safety net: full walk
+	needsFullWalk := cache == nil ||
+		len(cache.Dirs) == 0 ||
+		time.Since(cache.LastFullWalk) > fullWalkInterval
+
+	if needsFullWalk {
+		dStats.fullWalk = true
+		files, dirs := fullWalkJSONL(dir)
+		if cache != nil {
+			cache.Dirs = dirs
+			cache.LastFullWalk = time.Now()
+		}
+		dStats.dirsChecked = len(dirs)
+		return files, dStats
+	}
+
+	// Warm start: stat known directories, walk only changed subtrees
+	dStats.dirsChecked = len(cache.Dirs)
+
+	// Separate dirs into changed vs unchanged
+	changedRoots := make(map[string]bool)
+	unchangedDirs := make(map[string]bool)
+
+	for dirPath, cachedMtime := range cache.Dirs {
+		info, err := os.Stat(dirPath)
+		if err != nil {
+			changedRoots[dirPath] = true
+			dStats.dirsChanged++
+			continue
+		}
+		currentMtime := info.ModTime().UnixNano()
+		if currentMtime != cachedMtime {
+			changedRoots[dirPath] = true
+			dStats.dirsChanged++
+		} else {
+			unchangedDirs[dirPath] = true
+		}
+	}
+
+	// Collect files from unchanged directories using the cache's known files
+	fileSet := make(map[string]bool)
+	for filePath := range cache.Files {
+		parentDir := filepath.Dir(filePath)
+		if unchangedDirs[parentDir] {
+			fileSet[filePath] = true
+			dStats.filesFromCache++
+		}
+	}
+
+	// Walk changed subtrees
+	roots := minimalRoots(changedRoots)
+	for _, root := range roots {
+		dStats.subtreesWalked++
+		subtreeFiles, subtreeDirs := walkSubtree(root)
+		for _, f := range subtreeFiles {
+			fileSet[f] = true
+		}
+		for d, mtime := range subtreeDirs {
+			cache.Dirs[d] = mtime
+			delete(unchangedDirs, d)
+		}
+	}
+
+	// Clean up deleted directories from manifest
+	for dirPath := range cache.Dirs {
+		if _, err := os.Stat(dirPath); err != nil {
+			delete(cache.Dirs, dirPath)
+		}
+	}
+
+	files := make([]string, 0, len(fileSet))
+	for f := range fileSet {
+		files = append(files, f)
+	}
+	sort.Strings(files)
+
+	return files, dStats
+}
+
+// minimalRoots filters a set of directory paths to only the top-level roots,
+// removing any path that is a descendant of another path in the set.
+func minimalRoots(dirs map[string]bool) []string {
+	paths := make([]string, 0, len(dirs))
+	for d := range dirs {
+		paths = append(paths, d)
+	}
+	sort.Strings(paths)
+
+	var roots []string
+	for _, p := range paths {
+		isChild := false
+		for _, root := range roots {
+			if strings.HasPrefix(p, root+string(filepath.Separator)) {
+				isChild = true
+				break
+			}
+		}
+		if !isChild {
+			roots = append(roots, p)
+		}
+	}
+	return roots
 }
 
 // EntryData stores parsed entry info for deduplication
@@ -88,17 +236,54 @@ type FileStats struct {
 }
 
 // Cache types
-const CacheVersion = 1
+const CacheVersion = 2
+
+var cacheMagic = [4]byte{'C', 'C', 'U', 'G'}
 
 type FileCacheEntry struct {
-	ModTime int64        `json:"mtime"`
-	Entries []*EntryData `json:"entries"`
+	ModTime int64
+	Size    int64
+	Entries []EntryData
 }
 
 type CacheFile struct {
-	Version  int                        `json:"version"`
-	Timezone string                     `json:"timezone"`
-	Files    map[string]*FileCacheEntry `json:"files"`
+	Version      int
+	Timezone     string
+	Files        map[string]*FileCacheEntry
+	Dirs         map[string]int64
+	LastFullWalk time.Time
+}
+
+// Encoded types for string-interned binary cache
+type EncodedCache struct {
+	StringTable  []string
+	Files        map[string]*EncodedFileCacheEntry
+	Dirs         map[string]int64
+	LastFullWalk time.Time
+}
+
+type EncodedFileCacheEntry struct {
+	ModTime int64
+	Size    int64
+	Entries []EncodedEntry
+}
+
+type EncodedEntry struct {
+	Key                 string
+	DateIdx             int
+	ModelIdx            int
+	InputTokens         int
+	OutputTokens        int
+	CacheCreationTokens int
+	CacheReadTokens     int
+}
+
+type discoveryStats struct {
+	dirsChecked    int
+	dirsChanged    int
+	subtreesWalked int
+	filesFromCache int
+	fullWalk       bool
 }
 
 func getCacheDir() string {
@@ -110,6 +295,10 @@ func getCacheDir() string {
 }
 
 func getCachePath() string {
+	return filepath.Join(getCacheDir(), "cache.bin")
+}
+
+func getLegacyCachePath() string {
 	return filepath.Join(getCacheDir(), "cache.json")
 }
 
@@ -118,16 +307,113 @@ func getLocalTimezone() string {
 	return zone
 }
 
-func loadCache() *CacheFile {
-	data, err := os.ReadFile(getCachePath())
+// loadLegacyJSONCache tries to read the old JSON cache format and migrate it
+func loadLegacyJSONCache() *CacheFile {
+	data, err := os.ReadFile(getLegacyCachePath())
 	if err != nil {
 		return nil
 	}
-	var cache CacheFile
-	if json.Unmarshal(data, &cache) != nil {
+	type jsonFileCacheEntry struct {
+		ModTime int64        `json:"mtime"`
+		Size    int64        `json:"size"`
+		Entries []*EntryData `json:"entries"`
+	}
+	type jsonCacheFile struct {
+		Version      int                            `json:"version"`
+		Timezone     string                         `json:"timezone"`
+		Files        map[string]*jsonFileCacheEntry  `json:"files"`
+		Dirs         map[string]int64               `json:"dirs,omitempty"`
+		LastFullWalk time.Time                      `json:"last_full_walk,omitempty"`
+	}
+	var legacy jsonCacheFile
+	if json.Unmarshal(data, &legacy) != nil {
 		return nil
 	}
-	return &cache
+	cache := &CacheFile{
+		Version:      legacy.Version,
+		Timezone:     legacy.Timezone,
+		Files:        make(map[string]*FileCacheEntry, len(legacy.Files)),
+		Dirs:         legacy.Dirs,
+		LastFullWalk: legacy.LastFullWalk,
+	}
+	for path, fe := range legacy.Files {
+		entries := make([]EntryData, len(fe.Entries))
+		for i, e := range fe.Entries {
+			entries[i] = *e
+		}
+		cache.Files[path] = &FileCacheEntry{
+			ModTime: fe.ModTime,
+			Size:    fe.Size,
+			Entries: entries,
+		}
+	}
+	return cache
+}
+
+func loadCache() *CacheFile {
+	data, err := os.ReadFile(getCachePath())
+	if err != nil {
+		return loadLegacyJSONCache()
+	}
+
+	// Verify binary header: magic + version
+	if len(data) < 8 {
+		return loadLegacyJSONCache()
+	}
+	if data[0] != cacheMagic[0] || data[1] != cacheMagic[1] || data[2] != cacheMagic[2] || data[3] != cacheMagic[3] {
+		return loadLegacyJSONCache()
+	}
+	version := binary.LittleEndian.Uint32(data[4:8])
+	if version != CacheVersion {
+		return nil
+	}
+
+	// Decode gob payload
+	var encoded EncodedCache
+	if err := gob.NewDecoder(bytes.NewReader(data[8:])).Decode(&encoded); err != nil {
+		return nil
+	}
+
+	// De-intern strings
+	cache := &CacheFile{
+		Version:      int(version),
+		Timezone:     "",
+		Files:        make(map[string]*FileCacheEntry, len(encoded.Files)),
+		Dirs:         encoded.Dirs,
+		LastFullWalk: encoded.LastFullWalk,
+	}
+	if len(encoded.StringTable) > 0 {
+		cache.Timezone = encoded.StringTable[0]
+	}
+
+	for path, fe := range encoded.Files {
+		entries := make([]EntryData, len(fe.Entries))
+		for i, ee := range fe.Entries {
+			dateStr := ""
+			if ee.DateIdx >= 0 && ee.DateIdx < len(encoded.StringTable) {
+				dateStr = encoded.StringTable[ee.DateIdx]
+			}
+			modelStr := ""
+			if ee.ModelIdx >= 0 && ee.ModelIdx < len(encoded.StringTable) {
+				modelStr = encoded.StringTable[ee.ModelIdx]
+			}
+			entries[i] = EntryData{
+				Key:                 ee.Key,
+				Date:                dateStr,
+				Model:               modelStr,
+				InputTokens:         ee.InputTokens,
+				OutputTokens:        ee.OutputTokens,
+				CacheCreationTokens: ee.CacheCreationTokens,
+				CacheReadTokens:     ee.CacheReadTokens,
+			}
+		}
+		cache.Files[path] = &FileCacheEntry{
+			ModTime: fe.ModTime,
+			Size:    fe.Size,
+			Entries: entries,
+		}
+	}
+	return cache
 }
 
 func saveCache(cache *CacheFile) error {
@@ -135,20 +421,75 @@ func saveCache(cache *CacheFile) error {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
 	}
-	data, err := json.Marshal(cache)
-	if err != nil {
+
+	// Build string table for interning
+	stringIndex := make(map[string]int)
+	var stringTable []string
+	intern := func(s string) int {
+		if idx, ok := stringIndex[s]; ok {
+			return idx
+		}
+		idx := len(stringTable)
+		stringTable = append(stringTable, s)
+		stringIndex[s] = idx
+		return idx
+	}
+
+	// Timezone is always index 0
+	intern(cache.Timezone)
+
+	// Build encoded structure
+	encoded := EncodedCache{
+		Files:        make(map[string]*EncodedFileCacheEntry, len(cache.Files)),
+		Dirs:         cache.Dirs,
+		LastFullWalk: cache.LastFullWalk,
+	}
+	for path, fe := range cache.Files {
+		entries := make([]EncodedEntry, len(fe.Entries))
+		for i, e := range fe.Entries {
+			entries[i] = EncodedEntry{
+				Key:                 e.Key,
+				DateIdx:             intern(e.Date),
+				ModelIdx:            intern(e.Model),
+				InputTokens:         e.InputTokens,
+				OutputTokens:        e.OutputTokens,
+				CacheCreationTokens: e.CacheCreationTokens,
+				CacheReadTokens:     e.CacheReadTokens,
+			}
+		}
+		encoded.Files[path] = &EncodedFileCacheEntry{
+			ModTime: fe.ModTime,
+			Size:    fe.Size,
+			Entries: entries,
+		}
+	}
+	encoded.StringTable = stringTable
+
+	// Encode: magic + version + gob payload
+	var buf bytes.Buffer
+	buf.Write(cacheMagic[:])
+	var versionBytes [4]byte
+	binary.LittleEndian.PutUint32(versionBytes[:], uint32(CacheVersion))
+	buf.Write(versionBytes[:])
+
+	if err := gob.NewEncoder(&buf).Encode(encoded); err != nil {
 		return err
 	}
+
 	tmpPath := getCachePath() + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+	if err := os.WriteFile(tmpPath, buf.Bytes(), 0644); err != nil {
 		return err
 	}
+
+	// Remove legacy JSON cache if it exists
+	os.Remove(getLegacyCachePath())
+
 	return os.Rename(tmpPath, getCachePath())
 }
 
 // processFileForCache parses a JSONL file and returns entries keyed by dedup key
-func processFileForCache(path string) (map[string]*EntryData, FileStats) {
-	entries := make(map[string]*EntryData)
+func processFileForCache(path string) (map[string]EntryData, FileStats) {
+	entries := make(map[string]EntryData)
 	var stats FileStats
 
 	f, err := os.Open(path)
@@ -186,8 +527,8 @@ func processFileForCache(path string) (map[string]*EntryData, FileStats) {
 			model = "unknown"
 		}
 
-		if entries[key] == nil {
-			entries[key] = &EntryData{
+		if _, exists := entries[key]; !exists {
+			entries[key] = EntryData{
 				Key:                 key,
 				Date:                date,
 				Model:               model,
@@ -207,32 +548,28 @@ type cacheStats struct {
 	misses     int
 	totalLines int
 	totalNew   int
+	conflicts  int
 }
 
-func processWithCache(files []string, noCache bool, clearCache bool) (map[string]*EntryData, cacheStats) {
+func entryTotalTokens(e *EntryData) int {
+	return e.InputTokens + e.OutputTokens + e.CacheCreationTokens + e.CacheReadTokens
+}
+
+// processWithCacheLoaded processes files using a pre-loaded cache.
+func processWithCacheLoaded(files []string, cache *CacheFile, cacheValid bool) (map[string]*EntryData, cacheStats, bool) {
 	var stats cacheStats
-	allEntries := make(map[string]*EntryData)
-
-	if clearCache {
-		os.Remove(getCachePath())
-	}
-
-	var cache *CacheFile
-	if !noCache && !clearCache {
-		cache = loadCache()
-	}
-
-	cacheValid := cache != nil &&
-		cache.Version == CacheVersion &&
-		cache.Timezone == getLocalTimezone()
+	dirty := false
 
 	if !cacheValid {
-		cache = &CacheFile{
-			Version:  CacheVersion,
-			Timezone: getLocalTimezone(),
-			Files:    make(map[string]*FileCacheEntry),
-		}
+		dirty = true
 	}
+
+	// Pre-size allEntries from cache data
+	expectedCount := 0
+	for _, fc := range cache.Files {
+		expectedCount += len(fc.Entries)
+	}
+	allEntries := make(map[string]*EntryData, expectedCount)
 
 	existingFiles := make(map[string]bool)
 
@@ -240,6 +577,7 @@ func processWithCache(files []string, noCache bool, clearCache bool) (map[string
 	type cacheMiss struct {
 		path  string
 		mtime int64
+		size  int64
 	}
 	var misses []cacheMiss
 
@@ -249,28 +587,40 @@ func processWithCache(files []string, noCache bool, clearCache bool) (map[string
 		if err != nil {
 			continue
 		}
-		mtime := fi.ModTime().Unix()
+		mtime := fi.ModTime().UnixNano()
+		size := fi.Size()
 
 		cached, ok := cache.Files[path]
-		if cacheValid && ok && cached.ModTime == mtime {
+		if cacheValid && ok && cached.ModTime == mtime && cached.Size == size {
 			stats.hits++
-			for _, e := range cached.Entries {
-				if allEntries[e.Key] == nil {
+			for i := range cached.Entries {
+				e := &cached.Entries[i]
+				if existing, ok := allEntries[e.Key]; ok {
+					if entryTotalTokens(e) > entryTotalTokens(existing) {
+						allEntries[e.Key] = e
+						stats.conflicts++
+					}
+				} else {
 					allEntries[e.Key] = e
 					stats.totalNew++
 				}
 			}
 		} else {
 			stats.misses++
-			misses = append(misses, cacheMiss{path: path, mtime: mtime})
+			misses = append(misses, cacheMiss{path: path, mtime: mtime, size: size})
 		}
+	}
+
+	if len(misses) > 0 {
+		dirty = true
 	}
 
 	// Phase 2: Concurrent parsing of cache misses
 	type fileResult struct {
 		path    string
 		mtime   int64
-		entries []*EntryData
+		size    int64
+		entries []EntryData
 		stats   FileStats
 	}
 	results := make([]fileResult, len(misses))
@@ -286,13 +636,14 @@ func processWithCache(files []string, noCache bool, clearCache bool) (map[string
 			defer func() { <-sem }()
 
 			entries, fStats := processFileForCache(miss.path)
-			entrySlice := make([]*EntryData, 0, len(entries))
+			entrySlice := make([]EntryData, 0, len(entries))
 			for _, e := range entries {
 				entrySlice = append(entrySlice, e)
 			}
 			results[i] = fileResult{
 				path:    miss.path,
 				mtime:   miss.mtime,
+				size:    miss.size,
 				entries: entrySlice,
 				stats:   fStats,
 			}
@@ -301,16 +652,24 @@ func processWithCache(files []string, noCache bool, clearCache bool) (map[string
 	wg.Wait()
 
 	// Phase 3: Sequential merge — dedup entries, update cache
-	for _, r := range results {
+	for ri := range results {
+		r := &results[ri]
 		stats.totalLines += r.stats.LinesRead
-		for _, e := range r.entries {
-			if allEntries[e.Key] == nil {
+		for i := range r.entries {
+			e := &r.entries[i]
+			if existing, ok := allEntries[e.Key]; ok {
+				if entryTotalTokens(e) > entryTotalTokens(existing) {
+					allEntries[e.Key] = e
+					stats.conflicts++
+				}
+			} else {
 				allEntries[e.Key] = e
 				stats.totalNew++
 			}
 		}
 		cache.Files[r.path] = &FileCacheEntry{
 			ModTime: r.mtime,
+			Size:    r.size,
 			Entries: r.entries,
 		}
 	}
@@ -318,13 +677,12 @@ func processWithCache(files []string, noCache bool, clearCache bool) (map[string
 	// Cleanup deleted files
 	for path := range cache.Files {
 		if !existingFiles[path] {
+			dirty = true
 			delete(cache.Files, path)
 		}
 	}
 
-	_ = saveCache(cache)
-
-	return allEntries, stats
+	return allEntries, stats, dirty
 }
 
 func aggregateUsage(entries map[string]*EntryData) map[string]*DayUsage {
@@ -433,34 +791,65 @@ func main() {
 
 	totalStart := time.Now()
 
-	// Phase 1: Find files
+	// Load cache early so findJSONLFiles can use the directory manifest
+	if *clearCache {
+		os.Remove(getCachePath())
+		os.Remove(getLegacyCachePath())
+	}
+	var cache *CacheFile
+	if !*noCache && !*clearCache {
+		cache = loadCache()
+	}
+	cacheValid := cache != nil &&
+		cache.Version == CacheVersion &&
+		cache.Timezone == getLocalTimezone()
+	if !cacheValid {
+		cache = &CacheFile{
+			Version:  CacheVersion,
+			Timezone: getLocalTimezone(),
+			Files:    make(map[string]*FileCacheEntry),
+		}
+	}
+
+	// Phase 1: Find files (uses directory manifest on warm runs)
 	start := time.Now()
 	configDir := getConfigDir()
-	files := findJSONLFiles(filepath.Join(configDir, "projects"))
+	files, dStats := findJSONLFiles(filepath.Join(configDir, "projects"), cache)
 	findDuration := time.Since(start)
 
-	// Phase 3: Process files (with caching)
+	// Phase 2: Process files (with caching)
 	start = time.Now()
-	entries, cStats := processWithCache(files, *noCache, *clearCache)
+	entries, cStats, dirty := processWithCacheLoaded(files, cache, cacheValid)
 	processDuration := time.Since(start)
 
-	// Phase 4: Aggregate
+	// Phase 3: Aggregate
 	start = time.Now()
 	dayUsage := aggregateUsage(entries)
 	aggregateDuration := time.Since(start)
 
-	// Phase 5: Print table
+	// Phase 4: Print table
 	start = time.Now()
 	printTable(dayUsage, modelPricing)
 	printDuration := time.Since(start)
 
 	if *verbose {
 		fmt.Fprintf(os.Stderr, "\n--- Timing ---\n")
-		fmt.Fprintf(os.Stderr, "Find files:     %v (%d files)\n", findDuration, len(files))
-		fmt.Fprintf(os.Stderr, "Process files:  %v (cache: %d hits, %d misses, %d lines parsed, %d unique)\n",
-			processDuration, cStats.hits, cStats.misses, cStats.totalLines, cStats.totalNew)
+		if dStats.fullWalk {
+			fmt.Fprintf(os.Stderr, "Find files:     %v (%d files, full walk, %d dirs)\n",
+				findDuration, len(files), dStats.dirsChecked)
+		} else {
+			fmt.Fprintf(os.Stderr, "Find files:     %v (%d files, %d dirs checked, %d changed, %d subtrees walked, %d from cache)\n",
+				findDuration, len(files), dStats.dirsChecked, dStats.dirsChanged, dStats.subtreesWalked, dStats.filesFromCache)
+		}
+		fmt.Fprintf(os.Stderr, "Process files:  %v (cache: %d hits, %d misses, %d lines parsed, %d unique, %d conflicts)\n",
+			processDuration, cStats.hits, cStats.misses, cStats.totalLines, cStats.totalNew, cStats.conflicts)
 		fmt.Fprintf(os.Stderr, "Aggregate:      %v\n", aggregateDuration)
 		fmt.Fprintf(os.Stderr, "Print table:    %v\n", printDuration)
 		fmt.Fprintf(os.Stderr, "Total:          %v\n", time.Since(totalStart))
+	}
+
+	// Save cache after output so the user sees results immediately
+	if dirty || dStats.fullWalk || dStats.dirsChanged > 0 {
+		_ = saveCache(cache)
 	}
 }
