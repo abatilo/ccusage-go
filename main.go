@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -234,6 +236,13 @@ func processWithCache(files []string, noCache bool, clearCache bool) (map[string
 
 	existingFiles := make(map[string]bool)
 
+	// Phase 1: Sequential scan — handle cache hits, collect misses
+	type cacheMiss struct {
+		path  string
+		mtime int64
+	}
+	var misses []cacheMiss
+
 	for _, path := range files {
 		existingFiles[path] = true
 		fi, err := os.Stat(path)
@@ -244,7 +253,6 @@ func processWithCache(files []string, noCache bool, clearCache bool) (map[string
 
 		cached, ok := cache.Files[path]
 		if cacheValid && ok && cached.ModTime == mtime {
-			// Cache hit
 			stats.hits++
 			for _, e := range cached.Entries {
 				if allEntries[e.Key] == nil {
@@ -253,24 +261,57 @@ func processWithCache(files []string, noCache bool, clearCache bool) (map[string
 				}
 			}
 		} else {
-			// Cache miss
 			stats.misses++
-			entries, fileStats := processFileForCache(path)
-			stats.totalLines += fileStats.LinesRead
+			misses = append(misses, cacheMiss{path: path, mtime: mtime})
+		}
+	}
 
+	// Phase 2: Concurrent parsing of cache misses
+	type fileResult struct {
+		path    string
+		mtime   int64
+		entries []*EntryData
+		stats   FileStats
+	}
+	results := make([]fileResult, len(misses))
+
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, runtime.NumCPU())
+
+	for i, miss := range misses {
+		wg.Add(1)
+		go func(i int, miss cacheMiss) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			entries, fStats := processFileForCache(miss.path)
 			entrySlice := make([]*EntryData, 0, len(entries))
 			for _, e := range entries {
 				entrySlice = append(entrySlice, e)
-				if allEntries[e.Key] == nil {
-					allEntries[e.Key] = e
-					stats.totalNew++
-				}
 			}
+			results[i] = fileResult{
+				path:    miss.path,
+				mtime:   miss.mtime,
+				entries: entrySlice,
+				stats:   fStats,
+			}
+		}(i, miss)
+	}
+	wg.Wait()
 
-			cache.Files[path] = &FileCacheEntry{
-				ModTime: mtime,
-				Entries: entrySlice,
+	// Phase 3: Sequential merge — dedup entries, update cache
+	for _, r := range results {
+		stats.totalLines += r.stats.LinesRead
+		for _, e := range r.entries {
+			if allEntries[e.Key] == nil {
+				allEntries[e.Key] = e
+				stats.totalNew++
 			}
+		}
+		cache.Files[r.path] = &FileCacheEntry{
+			ModTime: r.mtime,
+			Entries: r.entries,
 		}
 	}
 
