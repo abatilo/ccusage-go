@@ -28,22 +28,33 @@ type LogEntry struct {
 			OutputTokens        int `json:"output_tokens"`
 			CacheCreationTokens int `json:"cache_creation_input_tokens"`
 			CacheReadTokens     int `json:"cache_read_input_tokens"`
+			CacheCreation       struct {
+				Ephemeral5m int `json:"ephemeral_5m_input_tokens"`
+				Ephemeral1h int `json:"ephemeral_1h_input_tokens"`
+			} `json:"cache_creation"`
+			ServiceTier   string `json:"service_tier"`
+			ServerToolUse struct {
+				WebSearchRequests int `json:"web_search_requests"`
+			} `json:"server_tool_use"`
 		} `json:"usage"`
 	} `json:"message"`
 }
 
 type ModelPricing struct {
-	Input      float64
-	Output     float64
-	CacheWrite float64
-	CacheRead  float64
+	Input        float64
+	Output       float64
+	CacheWrite   float64 // 5-minute ephemeral (1.25x base input)
+	CacheWrite1h float64 // 1-hour ephemeral (2x base input)
+	CacheRead    float64
 }
 
 type Usage struct {
-	Input      int
-	Output     int
-	CacheWrite int
-	CacheRead  int
+	Input             int
+	Output            int
+	CacheWrite        int
+	CacheWrite1h      int
+	CacheRead         int
+	WebSearchRequests int
 }
 
 type DayUsage struct {
@@ -226,7 +237,9 @@ type EntryData struct {
 	InputTokens         int    `json:"input_tokens"`
 	OutputTokens        int    `json:"output_tokens"`
 	CacheCreationTokens int    `json:"cache_creation_tokens"`
+	CacheWrite1hTokens  int    `json:"cache_write_1h_tokens"`
 	CacheReadTokens     int    `json:"cache_read_tokens"`
+	WebSearchRequests   int    `json:"web_search_requests"`
 }
 
 type FileStats struct {
@@ -236,7 +249,7 @@ type FileStats struct {
 }
 
 // Cache types
-const CacheVersion = 2
+const CacheVersion = 5
 
 var cacheMagic = [4]byte{'C', 'C', 'U', 'G'}
 
@@ -275,7 +288,9 @@ type EncodedEntry struct {
 	InputTokens         int
 	OutputTokens        int
 	CacheCreationTokens int
+	CacheWrite1hTokens  int
 	CacheReadTokens     int
+	WebSearchRequests   int
 }
 
 type discoveryStats struct {
@@ -303,8 +318,7 @@ func getLegacyCachePath() string {
 }
 
 func getLocalTimezone() string {
-	zone, _ := time.Now().Zone()
-	return zone
+	return "UTC"
 }
 
 // loadLegacyJSONCache tries to read the old JSON cache format and migrate it
@@ -404,7 +418,9 @@ func loadCache() *CacheFile {
 				InputTokens:         ee.InputTokens,
 				OutputTokens:        ee.OutputTokens,
 				CacheCreationTokens: ee.CacheCreationTokens,
+				CacheWrite1hTokens:  ee.CacheWrite1hTokens,
 				CacheReadTokens:     ee.CacheReadTokens,
+				WebSearchRequests:   ee.WebSearchRequests,
 			}
 		}
 		cache.Files[path] = &FileCacheEntry{
@@ -454,7 +470,9 @@ func saveCache(cache *CacheFile) error {
 				InputTokens:         e.InputTokens,
 				OutputTokens:        e.OutputTokens,
 				CacheCreationTokens: e.CacheCreationTokens,
+				CacheWrite1hTokens:  e.CacheWrite1hTokens,
 				CacheReadTokens:     e.CacheReadTokens,
+				WebSearchRequests:   e.WebSearchRequests,
 			}
 		}
 		encoded.Files[path] = &EncodedFileCacheEntry{
@@ -521,10 +539,29 @@ func processFileForCache(path string) (map[string]EntryData, FileStats) {
 		if err != nil {
 			continue
 		}
-		date := t.Local().Format("2006-01-02")
+		date := t.UTC().Format("2006-01-02")
 		model := entry.Message.Model
 		if model == "" {
 			model = "unknown"
+		}
+
+		// Fast mode detection: append :fast suffix for separate pricing
+		if entry.Message.Usage.ServiceTier == "fast" {
+			model = model + ":fast"
+		}
+
+		// Cache write breakdown: split 5m vs 1h when breakdown is available
+		cacheWrite5m := entry.Message.Usage.CacheCreationTokens
+		cacheWrite1h := 0
+		if cc := entry.Message.Usage.CacheCreation; cc.Ephemeral5m+cc.Ephemeral1h > 0 {
+			cacheWrite5m = cc.Ephemeral5m
+			cacheWrite1h = cc.Ephemeral1h
+		}
+
+		// Extended context detection: >200K total input tokens gets higher pricing tier
+		totalInputContext := entry.Message.Usage.InputTokens + cacheWrite5m + cacheWrite1h + entry.Message.Usage.CacheReadTokens
+		if totalInputContext > 200_000 {
+			model = model + ":extended"
 		}
 
 		if _, exists := entries[key]; !exists {
@@ -534,8 +571,10 @@ func processFileForCache(path string) (map[string]EntryData, FileStats) {
 				Model:               model,
 				InputTokens:         entry.Message.Usage.InputTokens,
 				OutputTokens:        entry.Message.Usage.OutputTokens,
-				CacheCreationTokens: entry.Message.Usage.CacheCreationTokens,
+				CacheCreationTokens: cacheWrite5m,
+				CacheWrite1hTokens:  cacheWrite1h,
 				CacheReadTokens:     entry.Message.Usage.CacheReadTokens,
+				WebSearchRequests:   entry.Message.Usage.ServerToolUse.WebSearchRequests,
 			}
 			stats.EntriesNew++
 		}
@@ -552,7 +591,7 @@ type cacheStats struct {
 }
 
 func entryTotalTokens(e *EntryData) int {
-	return e.InputTokens + e.OutputTokens + e.CacheCreationTokens + e.CacheReadTokens
+	return e.InputTokens + e.OutputTokens + e.CacheCreationTokens + e.CacheWrite1hTokens + e.CacheReadTokens
 }
 
 // processWithCacheLoaded processes files using a pre-loaded cache.
@@ -697,7 +736,9 @@ func aggregateUsage(entries map[string]*EntryData) map[string]*DayUsage {
 		dayUsage[e.Date].Models[e.Model].Input += e.InputTokens
 		dayUsage[e.Date].Models[e.Model].Output += e.OutputTokens
 		dayUsage[e.Date].Models[e.Model].CacheWrite += e.CacheCreationTokens
+		dayUsage[e.Date].Models[e.Model].CacheWrite1h += e.CacheWrite1hTokens
 		dayUsage[e.Date].Models[e.Model].CacheRead += e.CacheReadTokens
+		dayUsage[e.Date].Models[e.Model].WebSearchRequests += e.WebSearchRequests
 	}
 	return dayUsage
 }
@@ -705,14 +746,33 @@ func aggregateUsage(entries map[string]*EntryData) map[string]*DayUsage {
 func calculateCost(day *DayUsage, pricing map[string]ModelPricing) float64 {
 	var total float64
 	for model, usage := range day.Models {
-		p := pricing[model]
+		// Strip :extended suffix and apply >200K context window multipliers
+		lookupModel := model
+		extended := strings.HasSuffix(lookupModel, ":extended")
+		if extended {
+			lookupModel = strings.TrimSuffix(lookupModel, ":extended")
+		}
+
+		p := pricing[lookupModel]
 		if p.Input == 0 && p.Output == 0 {
 			p = pricing["default"]
 		}
+
+		if extended {
+			p.Input *= 2
+			p.Output *= 1.5
+			p.CacheWrite *= 2
+			p.CacheWrite1h *= 2
+			p.CacheRead *= 2
+		}
+
 		total += (float64(usage.Input)*p.Input +
 			float64(usage.Output)*p.Output +
 			float64(usage.CacheWrite)*p.CacheWrite +
+			float64(usage.CacheWrite1h)*p.CacheWrite1h +
 			float64(usage.CacheRead)*p.CacheRead) / 1_000_000
+		// Web search: $10 per 1,000 requests
+		total += float64(usage.WebSearchRequests) * 0.01
 	}
 	return total
 }
@@ -721,7 +781,7 @@ func sumUsage(day *DayUsage) (input, output, cacheWrite, cacheRead int) {
 	for _, u := range day.Models {
 		input += u.Input
 		output += u.Output
-		cacheWrite += u.CacheWrite
+		cacheWrite += u.CacheWrite + u.CacheWrite1h
 		cacheRead += u.CacheRead
 	}
 	return
