@@ -33,6 +33,7 @@ type LogEntry struct {
 				Ephemeral1h int `json:"ephemeral_1h_input_tokens"`
 			} `json:"cache_creation"`
 			ServiceTier   string `json:"service_tier"`
+			Speed         string `json:"speed"`
 			ServerToolUse struct {
 				WebSearchRequests int `json:"web_search_requests"`
 			} `json:"server_tool_use"`
@@ -546,7 +547,7 @@ func processFileForCache(path string) (map[string]EntryData, FileStats) {
 		}
 
 		// Fast mode detection: append :fast suffix for separate pricing
-		if entry.Message.Usage.ServiceTier == "fast" {
+		if entry.Message.Usage.Speed == "fast" {
 			model = model + ":fast"
 		}
 
