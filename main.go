@@ -848,7 +848,25 @@ func main() {
 	verbose := flag.Bool("v", false, "verbose timing output")
 	noCache := flag.Bool("no-cache", false, "skip reading cache (still writes cache)")
 	clearCache := flag.Bool("clear-cache", false, "delete cache and rebuild")
+	days := flag.Int("days", 30, "number of days of history to show")
+	showAll := flag.Bool("all", false, "show all history (overrides --days)")
 	flag.Parse()
+
+	// Validate mutually exclusive flags
+	daysExplicit := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "days" {
+			daysExplicit = true
+		}
+	})
+	if *showAll && daysExplicit {
+		fmt.Fprintf(os.Stderr, "error: --all and --days are mutually exclusive\n")
+		os.Exit(1)
+	}
+	if *days <= 0 {
+		fmt.Fprintf(os.Stderr, "error: --days must be positive\n")
+		os.Exit(1)
+	}
 
 	totalStart := time.Now()
 
@@ -888,6 +906,16 @@ func main() {
 	dayUsage := aggregateUsage(entries)
 	aggregateDuration := time.Since(start)
 
+	// Filter by date range
+	if !*showAll {
+		cutoff := time.Now().UTC().AddDate(0, 0, -(*days - 1)).Format("2006-01-02")
+		for date := range dayUsage {
+			if date < cutoff {
+				delete(dayUsage, date)
+			}
+		}
+	}
+
 	// Phase 4: Print table
 	start = time.Now()
 	printTable(dayUsage, modelPricing)
@@ -905,6 +933,11 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Process files:  %v (cache: %d hits, %d misses, %d lines parsed, %d unique, %d conflicts)\n",
 			processDuration, cStats.hits, cStats.misses, cStats.totalLines, cStats.totalNew, cStats.conflicts)
 		fmt.Fprintf(os.Stderr, "Aggregate:      %v\n", aggregateDuration)
+		if *showAll {
+			fmt.Fprintf(os.Stderr, "Date filter:    all dates\n")
+		} else {
+			fmt.Fprintf(os.Stderr, "Date filter:    last %d days\n", *days)
+		}
 		fmt.Fprintf(os.Stderr, "Print table:    %v\n", printDuration)
 		fmt.Fprintf(os.Stderr, "Total:          %v\n", time.Since(totalStart))
 	}
