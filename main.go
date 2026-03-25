@@ -559,12 +559,6 @@ func processFileForCache(path string) (map[string]EntryData, FileStats) {
 			cacheWrite1h = cc.Ephemeral1h
 		}
 
-		// Extended context detection: >200K total input tokens gets higher pricing tier
-		totalInputContext := entry.Message.Usage.InputTokens + cacheWrite5m + cacheWrite1h + entry.Message.Usage.CacheReadTokens
-		if totalInputContext > 200_000 {
-			model = model + ":extended"
-		}
-
 		if _, exists := entries[key]; !exists {
 			entries[key] = EntryData{
 				Key:                 key,
@@ -747,24 +741,9 @@ func aggregateUsage(entries map[string]*EntryData) map[string]*DayUsage {
 func calculateCost(day *DayUsage, pricing map[string]ModelPricing) float64 {
 	var total float64
 	for model, usage := range day.Models {
-		// Strip :extended suffix and apply >200K context window multipliers
-		lookupModel := model
-		extended := strings.HasSuffix(lookupModel, ":extended")
-		if extended {
-			lookupModel = strings.TrimSuffix(lookupModel, ":extended")
-		}
-
-		p := pricing[lookupModel]
+		p := pricing[model]
 		if p.Input == 0 && p.Output == 0 {
 			p = pricing["default"]
-		}
-
-		if extended {
-			p.Input *= 2
-			p.Output *= 1.5
-			p.CacheWrite *= 2
-			p.CacheWrite1h *= 2
-			p.CacheRead *= 2
 		}
 
 		total += (float64(usage.Input)*p.Input +
