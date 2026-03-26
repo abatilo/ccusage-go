@@ -827,7 +827,7 @@ func main() {
 	verbose := flag.Bool("v", false, "verbose timing output")
 	noCache := flag.Bool("no-cache", false, "skip reading cache (still writes cache)")
 	clearCache := flag.Bool("clear-cache", false, "delete cache and rebuild")
-	days := flag.Int("days", 30, "number of days of history to show")
+	days := flag.Int("days", 0, "number of days of history to show (default: month to date)")
 	showAll := flag.Bool("all", false, "show all history (overrides --days)")
 	flag.Parse()
 
@@ -842,7 +842,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "error: --all and --days are mutually exclusive\n")
 		os.Exit(1)
 	}
-	if *days <= 0 {
+	if daysExplicit && *days <= 0 {
 		fmt.Fprintf(os.Stderr, "error: --days must be positive\n")
 		os.Exit(1)
 	}
@@ -887,7 +887,13 @@ func main() {
 
 	// Filter by date range
 	if !*showAll {
-		cutoff := time.Now().UTC().AddDate(0, 0, -(*days - 1)).Format("2006-01-02")
+		var cutoff string
+		now := time.Now().UTC()
+		if daysExplicit {
+			cutoff = now.AddDate(0, 0, -(*days - 1)).Format("2006-01-02")
+		} else {
+			cutoff = time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC).Format("2006-01-02")
+		}
 		for date := range dayUsage {
 			if date < cutoff {
 				delete(dayUsage, date)
@@ -914,8 +920,10 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Aggregate:      %v\n", aggregateDuration)
 		if *showAll {
 			fmt.Fprintf(os.Stderr, "Date filter:    all dates\n")
-		} else {
+		} else if daysExplicit {
 			fmt.Fprintf(os.Stderr, "Date filter:    last %d days\n", *days)
+		} else {
+			fmt.Fprintf(os.Stderr, "Date filter:    month to date\n")
 		}
 		fmt.Fprintf(os.Stderr, "Print table:    %v\n", printDuration)
 		fmt.Fprintf(os.Stderr, "Total:          %v\n", time.Since(totalStart))

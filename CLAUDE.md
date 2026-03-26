@@ -6,7 +6,7 @@ Minimal Claude Code usage tracker. Reads JSONL logs, calculates costs, outputs d
 
 ```bash
 go build .
-./ccusage-go              # last 30 days (default)
+./ccusage-go              # month to date (default)
 ./ccusage-go --days 7     # last 7 days
 ./ccusage-go --all        # all history
 ./ccusage-go -v           # verbose timing output
