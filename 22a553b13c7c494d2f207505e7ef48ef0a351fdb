@@ -1,0 +1,23 @@
+## Conversation
+User asked to show projections when using --days flag too, not just MTD mode.
+
+## Actions
+- Removed isMTD variable and daysExplicit check from the projection condition
+- Condition now only checks !*showAll && len(dailyCosts) >= 2
+- Projections appear in both MTD and --days modes, suppressed only with --all
+
+## Errors & Mistakes
+None.
+
+## Dead Ends
+None.
+
+## Hints for Future Agents
+- Projections are now shown in all modes except --all
+- The >= 2 days guard remains to avoid degenerate percentiles with a single day
+
+## Codebase Discoveries
+None.
+
+## Open Questions
+None.
