@@ -1,0 +1,21 @@
+## Conversation
+User ran /commit after fixing install.sh shebang (missing 'bash' after env).
+
+## Actions
+- Identified as separate logical change from main.go edit
+- Committed independently
+
+## Errors & Mistakes
+None.
+
+## Dead Ends
+None.
+
+## Hints for Future Agents
+None.
+
+## Codebase Discoveries
+None.
+
+## Open Questions
+None.
