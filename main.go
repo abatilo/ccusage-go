@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -757,6 +758,50 @@ func calculateCost(day *DayUsage, pricing map[string]ModelPricing) float64 {
 	return total
 }
 
+func calculateCostAllRegular(day *DayUsage, pricing map[string]ModelPricing) float64 {
+	var total float64
+	for model, usage := range day.Models {
+		baseModel := strings.TrimSuffix(model, ":fast")
+		p := pricing[baseModel]
+		if p.Input == 0 && p.Output == 0 {
+			p = pricing["default"]
+		}
+		total += (float64(usage.Input)*p.Input +
+			float64(usage.Output)*p.Output +
+			float64(usage.CacheWrite)*p.CacheWrite +
+			float64(usage.CacheWrite1h)*p.CacheWrite1h +
+			float64(usage.CacheRead)*p.CacheRead) / 1_000_000
+		total += float64(usage.WebSearchRequests) * 0.01
+	}
+	return total
+}
+
+func calculateCostAllFast(day *DayUsage, pricing map[string]ModelPricing) float64 {
+	var total float64
+	for model, usage := range day.Models {
+		var p ModelPricing
+		if strings.HasSuffix(model, ":fast") {
+			p = pricing[model]
+		} else {
+			if fp, ok := pricing[model+":fast"]; ok {
+				p = fp
+			} else {
+				p = pricing[model]
+			}
+		}
+		if p.Input == 0 && p.Output == 0 {
+			p = pricing["default"]
+		}
+		total += (float64(usage.Input)*p.Input +
+			float64(usage.Output)*p.Output +
+			float64(usage.CacheWrite)*p.CacheWrite +
+			float64(usage.CacheWrite1h)*p.CacheWrite1h +
+			float64(usage.CacheRead)*p.CacheRead) / 1_000_000
+		total += float64(usage.WebSearchRequests) * 0.01
+	}
+	return total
+}
+
 func sumUsage(day *DayUsage) (input, output, cacheWrite, cacheRead int) {
 	for _, u := range day.Models {
 		input += u.Input
@@ -782,45 +827,121 @@ func formatNumber(n int) string {
 	return string(result)
 }
 
-func printTable(dayUsage map[string]*DayUsage, pricing map[string]ModelPricing) {
+func formatDollars(v float64) string {
+	cents := int(math.Round(v * 100))
+	whole := cents / 100
+	frac := cents % 100
+	if frac < 0 {
+		frac = -frac
+	}
+	return fmt.Sprintf("$%s.%02d", formatNumber(whole), frac)
+}
+
+func printTable(dayUsage map[string]*DayUsage, pricing map[string]ModelPricing) []float64 {
 	var dates []string
 	for d := range dayUsage {
 		dates = append(dates, d)
 	}
 	sort.Strings(dates)
 
-	fmt.Printf("%-15s %17s %17s %17s %17s %15s\n",
-		"Date", "Input", "Output", "CacheWrite", "CacheRead", "Cost")
-	fmt.Println(strings.Repeat("-", 103))
+	const width = 126
+	fmt.Printf("%-15s %17s %17s %17s %17s %12s %12s %12s\n",
+		"Date", "Input", "Output", "CacheWrite", "CacheRead", "Cost", "AllRegular", "AllFast")
+	fmt.Println(strings.Repeat("-", width))
 
 	var totalInput, totalOutput, totalCacheWrite, totalCacheRead int
-	var totalCost float64
+	var totalCost, totalCostRegular, totalCostFast float64
+	var dailyCosts []float64
 	for _, date := range dates {
 		day := dayUsage[date]
 		input, output, cacheWrite, cacheRead := sumUsage(day)
 		cost := calculateCost(day, pricing)
+		costRegular := calculateCostAllRegular(day, pricing)
+		costFast := calculateCostAllFast(day, pricing)
 		totalInput += input
 		totalOutput += output
 		totalCacheWrite += cacheWrite
 		totalCacheRead += cacheRead
 		totalCost += cost
-		fmt.Printf("%-15s %17s %17s %17s %17s %15s\n",
+		totalCostRegular += costRegular
+		totalCostFast += costFast
+		dailyCosts = append(dailyCosts, cost)
+		fmt.Printf("%-15s %17s %17s %17s %17s %12s %12s %12s\n",
 			date,
 			formatNumber(input),
 			formatNumber(output),
 			formatNumber(cacheWrite),
 			formatNumber(cacheRead),
-			fmt.Sprintf("$%.2f", cost))
+			formatDollars(cost),
+			formatDollars(costRegular),
+			formatDollars(costFast))
 	}
 
-	fmt.Println(strings.Repeat("-", 103))
-	fmt.Printf("%-15s %17s %17s %17s %17s %15s\n",
+	fmt.Println(strings.Repeat("-", width))
+	fmt.Printf("%-15s %17s %17s %17s %17s %12s %12s %12s\n",
 		"Total",
 		formatNumber(totalInput),
 		formatNumber(totalOutput),
 		formatNumber(totalCacheWrite),
 		formatNumber(totalCacheRead),
-		fmt.Sprintf("$%.2f", totalCost))
+		formatDollars(totalCost),
+		formatDollars(totalCostRegular),
+		formatDollars(totalCostFast))
+	return dailyCosts
+}
+
+func percentile(sorted []float64, p float64) float64 {
+	n := len(sorted)
+	idx := int(math.Ceil(p/100.0*float64(n))) - 1
+	if idx < 0 {
+		idx = 0
+	}
+	if idx >= n {
+		idx = n - 1
+	}
+	return sorted[idx]
+}
+
+func printProjections(dailyCosts []float64) {
+	if len(dailyCosts) < 2 {
+		return
+	}
+
+	sorted := make([]float64, len(dailyCosts))
+	copy(sorted, dailyCosts)
+	sort.Float64s(sorted)
+
+	var sum float64
+	for _, c := range dailyCosts {
+		sum += c
+	}
+	mean := sum / float64(len(dailyCosts))
+	p50 := percentile(sorted, 50)
+	p75 := percentile(sorted, 75)
+	p99 := percentile(sorted, 99)
+
+	now := time.Now().UTC()
+	daysInMonth := time.Date(now.Year(), now.Month()+1, 0, 0, 0, 0, 0, time.UTC).Day()
+
+	fmt.Printf("\nProjections (MTD, %d days sampled)\n", len(dailyCosts))
+	fmt.Printf("%-10s %12s %12s %12s\n", "", "Daily", "Monthly", "Yearly")
+	for _, stat := range []struct {
+		name string
+		val  float64
+	}{
+		{"Mean", mean},
+		{"p50", p50},
+		{"p75", p75},
+		{"p99", p99},
+	} {
+		monthly := stat.val * float64(daysInMonth)
+		yearly := stat.val * 365
+		fmt.Printf("  %-8s %12s %12s %12s\n",
+			stat.name,
+			formatDollars(stat.val),
+			formatDollars(monthly),
+			formatDollars(yearly))
+	}
 }
 
 func main() {
@@ -903,7 +1024,11 @@ func main() {
 
 	// Phase 4: Print table
 	start = time.Now()
-	printTable(dayUsage, modelPricing)
+	dailyCosts := printTable(dayUsage, modelPricing)
+	isMTD := !*showAll && !daysExplicit
+	if isMTD && len(dailyCosts) >= 2 {
+		printProjections(dailyCosts)
+	}
 	printDuration := time.Since(start)
 
 	if *verbose {
