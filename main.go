@@ -1025,8 +1025,7 @@ func main() {
 	// Phase 4: Print table
 	start = time.Now()
 	dailyCosts := printTable(dayUsage, modelPricing)
-	isMTD := !*showAll && !daysExplicit
-	if isMTD && len(dailyCosts) >= 2 {
+	if !*showAll && len(dailyCosts) >= 2 {
 		printProjections(dailyCosts)
 	}
 	printDuration := time.Since(start)
