@@ -7,6 +7,10 @@ var modelPricing = map[string]ModelPricing{
 	// Default pricing (used for unknown models)
 	"default": {Input: 3.0, Output: 15.0, CacheWrite: 3.75, CacheWrite1h: 6.0, CacheRead: 0.30},
 
+	// Opus 4.7
+	"claude-opus-4-7":      {Input: 5.0, Output: 25.0, CacheWrite: 6.25, CacheWrite1h: 10.0, CacheRead: 0.50},
+	"claude-opus-4-7:fast": {Input: 30.0, Output: 150.0, CacheWrite: 37.50, CacheWrite1h: 60.0, CacheRead: 3.0},
+
 	// Opus 4.6
 	"claude-opus-4-6":      {Input: 5.0, Output: 25.0, CacheWrite: 6.25, CacheWrite1h: 10.0, CacheRead: 0.50},
 	"claude-opus-4-6:fast": {Input: 30.0, Output: 150.0, CacheWrite: 37.50, CacheWrite1h: 60.0, CacheRead: 3.0},
