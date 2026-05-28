@@ -1,0 +1,72 @@
+## Conversation
+User toggled `/fast on` while running Claude Opus 4.8; the harness note said
+"Claude Opus 4.8 has been released and the fast mode is $10/$50 per million
+tokens instead of $30/$150." No explicit task text — the request was implicit
+from context (this is ccusage-go, a Claude usage cost tracker; recent commit
+7fc0894 had just added Opus 4.7 pricing the same way). Intent: add Opus 4.8 to
+pricing.go so its usage stops being priced at the default fallback.
+
+Two decisions confirmed with the user via AskUserQuestion:
+1. Regular (standard-speed) rate: SAME as 4.7 = $5/$25 (only fast mode changed).
+2. Short-form scope: update generic `opus`/`opus:fast` to 4.8 rates AND add the
+   `opus[1m]` alias — not just the minimal `claude-opus-4-8` pair.
+
+## Actions
+- Explore agent read pricing.go + main.go cost functions. Confirmed: exact-key
+  map lookup (no fuzzy match); unknown models detected via zero-value check
+  (p.Input==0 && p.Output==0) -> pricing["default"]. calculateCost (main.go:742),
+  calculateCostAllRegular (761), calculateCostAllFast (779). Fast suffix appended
+  at main.go:550-553 when usage.speed=="fast". No tests in repo. Model names are
+  ONLY in pricing.go (no hardcoded `if model==` anywhere in main.go).
+- Grepped real logs ~/.claude/projects/: model string is exactly
+  `claude-opus-4-8` (851 entries: 775 fast / 86 standard / 71 no-speed), NOT
+  `claude-opus-4-8[1m]`. Also found `opus[1m]` (32, 10 fast) and plain `opus` (5),
+  none of which matched a pricing key.
+- Edited pricing.go: added Opus 4.8 block above 4.7 (newest-first); base $5/$25,
+  fast $10/$50. Updated generic opus:fast 30/150 -> 10/50. Added opus[1m] +
+  opus[1m]:fast at 4.8 rates. Cache fields follow repo ratio CacheWrite=1.25x,
+  CacheWrite1h=2x, CacheRead=0.1x of input.
+- Verified: go build OK, go vet OK. golangci-lint reported 4 issues — ALL
+  pre-existing in main.go (errcheck on os.Remove x3, staticcheck QF1007), none in
+  pricing.go. Built old-HEAD binary into a temp dir and diffed last 3 days vs new
+  binary: 2026-05-28 (all-4.8 session) Cost 160.73->238.93, AllRegular
+  67.67->91.46, AllFast 227.58->310.85; 05-26/05-27 (no 4.8) unchanged. Confirms
+  correct, isolated effect.
+
+## Errors & Mistakes
+- Plan's verification note predicted AllFast would DROP for an all-4.8 day vs the
+  old $30/$150. Wrong premise: 4.8 had NO key before, so it fell to default
+  $3/$15, not $30/$150. Actual AllFast correctly ROSE (227.58->310.85) to the real
+  $10/$50 tier. Behavior is correct; only the prediction was off.
+- A shell `|| echo "not installed"` fallback misreported golangci-lint as "not
+  installed" — it IS installed; the `||` fired because the lint run exited
+  non-zero on finding the 4 pre-existing issues.
+
+## Dead Ends
+None.
+
+## Hints for Future Agents
+- ccusage costs are computed at print time from cached TOKEN COUNTS, not cached
+  dollar amounts. So a pricing.go change takes effect on the next normal run —
+  no --no-cache / --clear-cache needed.
+- For AllRegular AND AllFast to both resolve, a new model needs BOTH a base key
+  and a `:fast` key. Base only -> AllFast falls back to regular; :fast only ->
+  AllRegular falls back to default.
+- Map keys with brackets ("opus[1m]") are valid Go string literals; build is fine.
+- Opus 4.8 logs as plain `claude-opus-4-8` (no date suffix, like 4.6/4.7). The
+  short `opus[1m]` alias is the 1M-context invocation form. ccusage has NO
+  per-request context-length tiering, so opus[1m] is priced flat as Opus 4.8
+  (no long-context premium modeled).
+
+## Codebase Discoveries
+- Repo has zero test files; verification is build + vet + manual run only.
+- Opus 4.5/4.6/4.7 all share identical rates ($5/$25 reg, $30/$150 fast). 4.8 is
+  the first to diverge: fast dropped to $10/$50.
+- Lowering generic opus:fast re-prices historical plain-`opus` fast usage at the
+  new rate, but only ~5 such entries exist; impact negligible. User chose this so
+  `opus` tracks the current latest model.
+
+## Open Questions
+- Whether a true 1M-context (>200K token) premium should ever be modeled. Out of
+  scope now; ccusage prices flat per model.
+- Not pushed. No PR created. Branch: opus-4-8-pricing off main.
