@@ -1,0 +1,49 @@
+## Conversation
+User set a /goal: "research opus 5 and fable 5.1 pricing then update the code
+and push and then run the installer". Fully autonomous, no mid-task input.
+
+## Actions
+- Invoked the claude-api skill (mandatory trigger when a Claude model is named).
+  Its cached table (2026-06-24) gave Opus 5 $5/$25, Fable 5.1 $10/$50, fast
+  mode on Opus 5 at $10/$50, and flagged Fable 5.1 cache reads at $0.25/MTok.
+- Fetched the live pricing doc
+  https://platform.claude.com/docs/en/about-claude/pricing.md and confirmed:
+  * "Claude Fable 5.1 | $10 | $12.50 (5m) | $20 (1h) | $0.25 (hits) | $50",
+    footnote: hits are 0.025x base on Fable 5.1 / Mythos 5.1 only.
+  * "Claude Opus 5 | $5 | $6.25 | $10 | $0.50 | $25".
+  * Fast mode table: "Claude Opus 5 / Claude Opus 4.8 | $10 | $50"; caching
+    multipliers stack on top of fast pricing. Fable 5.1 absent, so no :fast key.
+  * Long context: 4.6+ models bill the full 1M window at standard rates.
+- Scanned ~/.claude/projects: 25071 "claude-opus-5" (first seen 2026-07-26;
+  15886 speed=standard, 29 speed=fast), 530 "claude-fable-5-1" (first seen
+  2026-09-01, all standard). No [1m] variants for either.
+- Added four rows to pricing.go above the Fable 5 block: claude-fable-5-1,
+  claude-fable-5-1[1m], claude-opus-5, claude-opus-5:fast.
+- gofmt -l reports only main.go (pre-existing). go build, go vet clean.
+  golangci-lint reports nothing in pricing.go.
+- Stash/rebuild comparison on --days 1 (2026-09-02): $6.35 old vs $14.42 new.
+  AllFast column moved to $16.23 because Opus 5 now has a :fast row.
+
+## Errors & Mistakes
+None.
+
+## Dead Ends
+None. Considered omitting the fable-5-1[1m] alias (no [1m] strings in logs for
+either new model) but kept it to match the Fable 5 row and its comment.
+
+## Hints for Future Agents
+- Opus 5 sat at default pricing for over five weeks (2026-07-26 to 2026-09-01)
+  before anyone noticed. A cheap guard: grep logs for model strings not present
+  as keys in pricing.go. Nobody has built that; consider it if this recurs.
+- Fable 5.1 is the first model where CacheRead is not Input*0.1. Do not
+  "fix" the 0.25 to 1.0 for consistency.
+- Log-scan gotcha: filenames under ~/.claude/projects start with "-", so pass
+  `--` before paths or use `grep -rh PATTERN dir`.
+
+## Codebase Discoveries
+- main.go appends ":fast" to the model key at parse time from usage.speed
+  (line ~552) and strips it for the AllRegular column (line ~764). New models
+  never need main.go edits.
+
+## Open Questions
+- Whether Claude Code will ever emit "claude-fable-5-1[1m]". Unobserved so far.
