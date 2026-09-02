@@ -7,11 +7,20 @@ var modelPricing = map[string]ModelPricing{
 	// Default pricing (used for unknown models)
 	"default": {Input: 3.0, Output: 15.0, CacheWrite: 3.75, CacheWrite1h: 6.0, CacheRead: 0.30},
 
+	// Fable 5.1 (no fast tier; cache reads are 0.025x base input instead of
+	// the standard 0.1x)
+	"claude-fable-5-1":     {Input: 10.0, Output: 50.0, CacheWrite: 12.50, CacheWrite1h: 20.0, CacheRead: 0.25},
+	"claude-fable-5-1[1m]": {Input: 10.0, Output: 50.0, CacheWrite: 12.50, CacheWrite1h: 20.0, CacheRead: 0.25},
+
 	// Fable 5 (no fast tier; full 1M context at standard pricing, so the [1m]
 	// variant bills the same as base — [1m]-suffixed strings appear in these
 	// logs for other models, e.g. opus[1m], and lookup is verbatim)
 	"claude-fable-5":     {Input: 10.0, Output: 50.0, CacheWrite: 12.50, CacheWrite1h: 20.0, CacheRead: 1.0},
 	"claude-fable-5[1m]": {Input: 10.0, Output: 50.0, CacheWrite: 12.50, CacheWrite1h: 20.0, CacheRead: 1.0},
+
+	// Opus 5 (same pricing as 4.8, including 2x fast mode)
+	"claude-opus-5":      {Input: 5.0, Output: 25.0, CacheWrite: 6.25, CacheWrite1h: 10.0, CacheRead: 0.50},
+	"claude-opus-5:fast": {Input: 10.0, Output: 50.0, CacheWrite: 12.50, CacheWrite1h: 20.0, CacheRead: 1.0},
 
 	// Opus 4.8 (same regular pricing as 4.7; fast mode dropped from 6x to 2x base)
 	"claude-opus-4-8":      {Input: 5.0, Output: 25.0, CacheWrite: 6.25, CacheWrite1h: 10.0, CacheRead: 0.50},
