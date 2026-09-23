@@ -1,0 +1,74 @@
+## Conversation
+User (ultracode effort mode): "there's a new model called claude-fable-5 which
+has new pricing. Please research the new model pricing then add the pricing to
+this project." Follow-up turn: "use the git-commit skill then push and then run
+@install.sh". No mid-task corrections; the research confirmed a single coherent
+answer.
+
+## Actions
+- Invoked the claude-api skill (its trigger mandates reading it before touching
+  anything when a Claude model is named). Its cached table (2026-05-26) gave
+  Fable 5 = $10/$50 per MTok, 1M context.
+- Read pricing.go and the git notes on 8bf0e12 (Opus 4.8) + 7fc0894 (Opus 4.7),
+  which document the playbook: exact-key lookup on message.model, ":fast"
+  appended at parse time from usage.speed, cache rates = input*1.25/2/0.1,
+  newest-first map ordering.
+- Ran background Workflow 'research-fable-5-pricing' (run wf_fe15b85a-6e7,
+  4 agents, ~571K tokens): web:pricing-docs, web:model-variants, logs:fable-strings
+  in parallel, then verify:reconcile adversarial arbiter.
+  * Live doc https://platform.claude.com/docs/en/about-claude/pricing.md row:
+    "Claude Fable 5 | $10 | $12.50 (5m) | $20 (1h) | $1 (hits) | $50".
+  * Long-context section: Fable 5 includes full 1M window at STANDARD pricing,
+    no >200K premium; caching discounts standard across the window.
+  * Fast-mode table lists only Opus 4.6/4.7 ($30/$150) and Opus 4.8 ($10/$50);
+    Fable 5 absent -> no :fast key.
+  * Logs: 1117+ entries of bare "claude-fable-5" (first seen 2026-06-09,
+    speeds: standard or absent, zero fast). No "claude-fable-5[1m]" observed.
+- Added two rows above the Opus 4.8 block: claude-fable-5 and claude-fable-5[1m],
+  both {10, 50, 12.50, 20, 1.0}.
+- gofmt -w, go build, go vet all clean. golangci-lint: only the 4 pre-existing
+  main.go warnings (505, 596, 975, 976).
+- Verified by stash/rebuild comparison on --days 1: 2026-06-09 cost $428.16
+  (old binary, fable at default) vs $501.37 (new binary). AllRegular/AllFast
+  moved by the same delta, as expected for a model with no fast variant.
+
+## Errors & Mistakes
+- None functional. One process wrinkle: `gofmt -w pricing.go` also realigned the
+  pre-existing short-form block (haiku/sonnet/opus) which was not gofmt-clean
+  before this session. That whitespace churn was split out of this commit into
+  the follow-up formatting commit per the git-commit skill's atomic-commit rule.
+
+## Dead Ends
+- Considered a :fast row derived from a multiplier; rejected — no documented
+  fast tier for Fable 5 and zero speed=="fast" fable lines in logs. There is no
+  defensible rate to derive today.
+- Considered stripping "[1m]" before lookup in main.go instead of an alias key
+  (the repo already strips ":fast" via TrimSuffix in calculateCostAllRegular).
+  Rejected as scope creep: a data-only change in pricing.go matches the repo
+  convention that new models never require main.go edits.
+
+## Hints for Future Agents
+- The [1m] alias row is purely defensive: logs only ever show bare
+  "claude-fable-5" so far, but opus[1m] (26 entries) proved [1m]-suffixed
+  strings do occur in these logs and previously fell to default silently.
+  Rates are identical because Fable 5 has no long-context premium.
+- If Anthropic later ships a Fable fast tier, add "claude-fable-5:fast" (and
+  "claude-fable-5[1m]:fast") — the parse path needs no changes.
+- Pricing applies at display time; cached entries reprice automatically, no
+  --clear-cache needed. CacheVersion still 5.
+- Log-scan gotcha (re-confirmed): filenames under ~/.claude/projects start with
+  "-", so use `grep -rh PATTERN dir` or pass `--` before filenames.
+
+## Codebase Discoveries
+- Workflow arbiter side observation: pricing.go's "Sonnet 4.5" comment block
+  contains key "claude-sonnet-4-5-20250514" — that date suffix belongs to
+  Sonnet 4 (Sonnet 4.5's real ID is claude-sonnet-4-5-20250929). Harmless
+  (identical rates) but likely a mislabeled/unused key. Not fixed here.
+- Coincidence, not conflict: claude-opus-4-8:fast {10, 50, 12.50, 20, 1.0}
+  exactly equals Fable 5 standard rates.
+
+## Open Questions
+- The opus[1m] entries themselves (26 lines) still have no pricing key and fall
+  to default — pre-existing gap flagged in the 8bf0e12 note, still unaddressed.
+- Whether Claude Code will ever emit "claude-fable-5[1m]" in message.model is
+  unknown; the alias row costs nothing if it never appears.

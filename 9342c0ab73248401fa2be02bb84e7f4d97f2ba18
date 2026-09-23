@@ -1,0 +1,50 @@
+## Conversation
+User asked to add two what-if pricing columns (all regular, all fast) to the
+daily cost table, plus mean/p50/p75/p99 projections for monthly and yearly
+spend based on MTD data. Follow-up request to format dollar amounts with comma
+separators.
+
+## Actions
+- Read all .go files via Explore agent to understand codebase structure
+- Read pricing.go (model pricing map with :fast suffix convention)
+- Read main.go lines 720-937 (calculateCost, sumUsage, printTable, main)
+- Read main.go lines 1-65 (data structures, imports)
+- Created plan file at ~/.claude/plans/sleepy-wondering-muffin.md
+- Added math import (line 11)
+- Added calculateCostAllRegular function after calculateCost (strips :fast suffix)
+- Added calculateCostAllFast function (adds :fast suffix, falls back to regular if no fast tier)
+- Added formatDollars helper using formatNumber for comma-separated dollar amounts
+- Modified printTable: new signature returning []float64, added AllRegular/AllFast columns, widened table from 103 to 126 chars
+- Added percentile helper (nearest-rank method)
+- Added printProjections function (mean, p50, p75, p99 with monthly/yearly extrapolation)
+- Updated main() to capture dailyCosts and conditionally print projections in MTD mode only
+- Built and tested: go build, go vet, manual runs with default/--days/--all modes
+
+## Errors & Mistakes
+None. Clean build on first attempt after all edits.
+
+## Dead Ends
+None.
+
+## Hints for Future Agents
+- The :fast suffix convention on model names is the key mechanism for pricing tiers.
+  calculateCostAllRegular strips it, calculateCostAllFast adds it.
+- Models without a fast tier (claude-opus-4-1, claude-haiku-3-5) have no :fast entry
+  in modelPricing. calculateCostAllFast falls back to their regular pricing for these.
+- The "default" pricing entry also has no "default:fast" counterpart.
+- printTable now returns []float64 of daily actual costs (in date order) for projections.
+- Projections only show in MTD mode (not --days or --all) and require >= 2 days of data.
+- formatDollars uses math.Round to avoid floating point truncation issues with cents.
+- Table width is now 126 chars (was 103). Cost columns narrowed from %15s to %12s.
+
+## Codebase Discoveries
+- The codebase is stdlib-only, single package (main.go + pricing.go).
+- DayUsage.Models keys include the :fast suffix from JSONL parsing (processFileForCache
+  checks entry.Message.Usage.Speed == "fast").
+- CacheWrite and CacheWrite1h are tracked separately for accurate cost calculation
+  (different pricing multipliers) but merged into one column for display via sumUsage.
+- WebSearchRequests are tracked in Usage and costed at $0.01/request but have no display column.
+
+## Open Questions
+- Whether to also show AllRegular/AllFast projections (currently only actual cost is projected).
+- Whether projections should be shown with fewer than 2 days of data (currently suppressed).

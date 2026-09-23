@@ -1,0 +1,24 @@
+## Conversation
+Same session as the parent Fable 5 pricing commit (see its note). The
+git-commit skill directs splitting unrelated changes within a file, so this
+whitespace churn was separated from the pricing change.
+
+## Actions
+- Ran gofmt -w pricing.go; only the short-form block changed. go build clean.
+
+## Errors & Mistakes
+None.
+
+## Dead Ends
+None.
+
+## Hints for Future Agents
+- gofmt aligns values across a contiguous run of map entries (broken only by
+  blank/comment lines). Hand-aligned per-pair entries will churn the whole
+  block the next time anyone runs gofmt on the file.
+
+## Codebase Discoveries
+None beyond the parent commit's note.
+
+## Open Questions
+None.

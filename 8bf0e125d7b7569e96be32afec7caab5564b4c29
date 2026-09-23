@@ -1,0 +1,82 @@
+## Conversation
+User (ultracode effort mode) reported Anthropic released Opus 4.8 with the
+same REGULAR pricing as 4.7, but a reduced fast-mode tier. User's stated
+premise: 4.7 fast was "6x the cost for input and output," and 4.8 fast is
+"only 3x the cost." Asked to (1) analyze how the on-disk JSONL logs let us
+distinguish 4.7 vs 4.8 and regular vs fast, (2) run a workflow to analyze
+everything, (3) add 4.8 + 4.8 fast pricing.
+
+CRITICAL CORRECTION mid-task: A workflow web-research agent (high confidence,
+citing platform.claude.com pricing + fast-mode docs) found the real Opus 4.8
+fast multiplier is 2x base ($10/$50), NOT 3x. The "3x" in press headlines
+("3x cheaper fast mode" - VentureBeat/Cryptopolitan) is a REDUCTION factor:
+6x / 3 = 2x. User had conflated "3x cheaper" with "3x the cost." Surfaced the
+discrepancy via AskUserQuestion with two concrete pricing.go previews; user
+chose 2x (per Anthropic docs). This is why the committed fast rate is $10/$50,
+contradicting the user's original literal instruction.
+
+## Actions
+- Read pricing.go (49 lines) and main.go (1060 lines) in full.
+- Confirmed parse path: LogEntry.Message.Model (main.go:545) used verbatim as
+  pricing key; main.go:551 appends ":fast" when Message.Usage.Speed=="fast".
+- Grepped ~/.claude/projects JSONL:
+  * distinct models: claude-opus-4-7 (100221), claude-opus-4-8 (5849/5885),
+    claude-opus-4-6 (133), opus[1m] (26), opus (5), plus codex/synthetic noise.
+  * speed values: standard, fast. service_tier: always "standard" (NOT a tier
+    discriminator).
+  * 4.8 first seen 2026-05-28; fast 4.8 exists: 235 on 05-28, 1425 on 05-29.
+- Launched background Workflow 'analyze-opus-48-pricing' (5 agents: model-strings,
+  tier-signal, pricing-invariant, web-pricing, then adversarial arbiter).
+- Verified 4.7 fast = uniform 6x across all 5 fields; cache = fixed multiple of
+  input (1.25x/2x/0.1x), invariant holds for both regular and fast rows.
+- Edited pricing.go: added claude-opus-4-8 {5/25/6.25/10/0.50} and
+  claude-opus-4-8:fast {10/50/12.50/20/1.0} above the 4.7 block.
+- go build OK, go vet OK. golangci-lint: 4 PRE-EXISTING warnings in main.go
+  (505,596,975,976), none in pricing.go - left untouched.
+- ./ccusage-go --clear-cache --days 3: Cost sits between AllRegular and AllFast
+  on every 4.8 day (e.g. 05-29: 362.47 <= 509.75 <= 724.93), proving :fast key
+  resolves instead of falling to default.
+
+## Errors & Mistakes
+- First jq analysis of 4.8 entries returned EMPTY. Root cause: filenames in
+  ~/.claude/projects begin with "-" (e.g. -Users-abatilo-work-ml-containers/...),
+  so `grep PATTERN "$f"` and `xargs cat` treated the filename as flags. Fix:
+  pass `-- "$f"` or stream with `grep -rh PATTERN .` (recursive grep handles the
+  paths internally). Future agents analyzing these logs MUST account for this.
+- Initial premise (3x) was wrong; nearly committed 15/75. The workflow's web
+  agent caught it. Lesson: verify external pricing facts, don't trust the
+  stated multiplier blindly.
+
+## Dead Ends
+- service_tier as a fast/standard discriminator: dead end, it is uniformly
+  "standard" for every entry including fast ones. Only usage.speed works.
+- Arbiter agent committed to "3x-flat-all-fields" (following the user's literal
+  instruction) but flagged 2x as RISK 1 / most-likely-correct. We overrode the
+  arbiter with the web evidence after user confirmation.
+
+## Hints for Future Agents
+- To add a new model: one line in pricing.go modelPricing map keyed by the exact
+  message.model string, plus a ":fast" variant. No date suffix for Opus 4.x
+  (4-8/4-7/4-6 are bare; only 4-5 and Sonnet/Haiku carry date suffixes).
+- Cache rates are structurally input*1.25 (5m write), input*2 (1h write),
+  input*0.1 (read). A fast tier is just a scalar multiple of the regular row;
+  keep all 5 fields at the same multiple or you break that invariant.
+- The cache already stores the ":fast"-suffixed model string (suffix is applied
+  at parse time in processFileForCache), and pricing is applied at display time,
+  so pricing changes take effect WITHOUT --clear-cache. CacheVersion is 5.
+
+## Codebase Discoveries
+- opus[1m] (26 entries, 1M-context variant) has NO pricing key -> falls to
+  default ($3/$15), undercharging. Bare "opus" (5) resolves to the opus key.
+  Flagged to user as out-of-scope; NOT fixed in this commit. Candidate follow-up:
+  add opus[1m] / opus[1m]:fast keys (and possibly a 1M-context premium tier).
+- Logs also contain gpt-5.2-codex / gpt-5.5 (Codex) and <synthetic> / $DRAFTER_PATH
+  noise lines; the parser's input/output==0 and empty-ID guards filter most out.
+
+## Open Questions
+- Are the 4.8 fast CACHE rates (12.50/20/1.0) exactly right? Anthropic's fast-mode
+  table only lists input/output; cache figures are DERIVED from the documented
+  rule "caching multipliers apply on top of fast pricing." High confidence but
+  not directly quoted. Fast mode is a research preview (beta header
+  fast-mode-2026-02-01) - rates may change.
+- opus[1m] pricing gap remains unaddressed.

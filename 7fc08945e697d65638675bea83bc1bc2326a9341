@@ -1,0 +1,71 @@
+## Conversation
+User asked: "There's a new model, claude-opus-4-7. Pricing is the same as
+claude-opus-4-6 but do we need to change anything?"
+
+Invoked via /plan, so the work was gated on an approved plan file at
+/Users/abatilo/.claude/plans/there-s-a-new-model-warm-liskov.md before any
+edits. Intent was a minimal audit + fix: confirm whether anything beyond
+the pricing map hardcodes model names, and if not, add 4.7 entries.
+
+## Actions
+1. Read pricing.go — confirmed modelPricing is a flat map keyed by exact
+   model string, with parallel :fast variants for fast-mode pricing.
+2. Read main.go end-to-end. Three cost paths consume the map:
+   - calculateCost (main.go:742) — exact-key lookup, zero-value fallback
+     to pricing["default"].
+   - calculateCostAllRegular (main.go:761) — strips ":fast" suffix, then
+     exact-key lookup.
+   - calculateCostAllFast (main.go:779) — appends ":fast" if missing, then
+     falls back to the bare name, then to default.
+3. Grep for opus-4-6|opus-4-7|claude-opus across the repo — only pricing.go
+   matched. No hardcoded model checks in main.go or elsewhere.
+4. Wrote plan file, got approval via ExitPlanMode.
+5. Edit pricing.go: added the "Opus 4.7" block directly above "Opus 4.6",
+   preserving the newest-first ordering convention (4.6 > 4.5 > 4.1).
+6. Ran `go build . && go vet ./...` — both clean.
+
+## Errors & Mistakes
+None. Straightforward two-line addition.
+
+## Dead Ends
+Considered whether the short-form "opus" / "opus:fast" aliases at
+pricing.go:43-44 needed updating to track 4.7. Rejected: they already
+carry the same rates as 4.6/4.7 (both are $5/$25 in, same cache rates),
+so there's nothing to change. They're aliases, not version pointers.
+
+Considered whether the cache format needed a version bump. Rejected:
+CacheVersion=5 stores tokens per model name, not cost. Costs are recomputed
+from modelPricing on every run, so previously-cached claude-opus-4-7 entries
+(which would have been costed against "default") will automatically pick up
+the correct pricing on the next run. No --clear-cache needed in practice,
+though the plan mentions it as a belt-and-suspenders verification step.
+
+## Hints for Future Agents
+- pricing.go is the single source of truth for model rates. When a new
+  Claude model drops, adding regular + :fast entries here is sufficient —
+  no code changes to main.go required.
+- The :fast suffix is appended in processFileForCache (main.go:551) when
+  the JSONL entry's usage.speed == "fast". It's not a separate model, it's
+  a pricing variant. Always add both "claude-X" and "claude-X:fast" pairs.
+- calculateCostAllRegular/AllFast exist so the table can show "what would
+  this have cost if everything ran regular / everything ran fast" — they
+  derive from the base and :fast keys respectively. Missing either key
+  silently falls back to default pricing and produces wrong numbers in
+  those columns without any error.
+- Ordering convention in the map: newest version first (4.7 above 4.6 above
+  4.5 above 4.1), Opus > Sonnet > Haiku families, short-form aliases last.
+
+## Codebase Discoveries
+- Opus 4.6 and Opus 4.7 share both the regular and fast pricing schedules
+  exactly. That's also why the short-form "opus" alias can stay version-
+  agnostic — it points at the shared rate.
+- Opus 4.1 (claude-opus-4-1-20250805) is on a legacy higher rate
+  ($15/$75 vs $5/$25) — worth noting if ever asked to collapse Opus
+  entries into a single alias; you can't without losing accuracy on 4.1.
+- Model IDs for recent Opus releases dropped the date suffix
+  (claude-opus-4-6, claude-opus-4-7) while earlier ones kept it
+  (claude-opus-4-5-20251101, claude-opus-4-1-20250805). So the undated
+  form is expected for 4.7 too.
+
+## Open Questions
+None.
