@@ -251,7 +251,7 @@ type FileStats struct {
 }
 
 // Cache types
-const CacheVersion = 5
+const CacheVersion = 6
 
 var cacheMagic = [4]byte{'C', 'C', 'U', 'G'}
 
@@ -337,7 +337,7 @@ func loadLegacyJSONCache() *CacheFile {
 	type jsonCacheFile struct {
 		Version      int                            `json:"version"`
 		Timezone     string                         `json:"timezone"`
-		Files        map[string]*jsonFileCacheEntry  `json:"files"`
+		Files        map[string]*jsonFileCacheEntry `json:"files"`
 		Dirs         map[string]int64               `json:"dirs,omitempty"`
 		LastFullWalk time.Time                      `json:"last_full_walk,omitempty"`
 	}
@@ -560,19 +560,23 @@ func processFileForCache(path string) (map[string]EntryData, FileStats) {
 			cacheWrite1h = cc.Ephemeral1h
 		}
 
-		if _, exists := entries[key]; !exists {
-			entries[key] = EntryData{
-				Key:                 key,
-				Date:                date,
-				Model:               model,
-				InputTokens:         entry.Message.Usage.InputTokens,
-				OutputTokens:        entry.Message.Usage.OutputTokens,
-				CacheCreationTokens: cacheWrite5m,
-				CacheWrite1hTokens:  cacheWrite1h,
-				CacheReadTokens:     entry.Message.Usage.CacheReadTokens,
-				WebSearchRequests:   entry.Message.Usage.ServerToolUse.WebSearchRequests,
-			}
+		candidate := EntryData{
+			Key:                 key,
+			Date:                date,
+			Model:               model,
+			InputTokens:         entry.Message.Usage.InputTokens,
+			OutputTokens:        entry.Message.Usage.OutputTokens,
+			CacheCreationTokens: cacheWrite5m,
+			CacheWrite1hTokens:  cacheWrite1h,
+			CacheReadTokens:     entry.Message.Usage.CacheReadTokens,
+			WebSearchRequests:   entry.Message.Usage.ServerToolUse.WebSearchRequests,
+		}
+		existing, exists := entries[key]
+		if !exists {
 			stats.EntriesNew++
+		}
+		if !exists || entryTotalTokens(&candidate) > entryTotalTokens(&existing) {
+			entries[key] = candidate
 		}
 	}
 	return entries, stats
