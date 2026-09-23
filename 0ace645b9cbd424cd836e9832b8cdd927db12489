@@ -1,0 +1,17 @@
+## Intent & Decisions
+User asked to research and add pricing and tracking for Fable 5.1, Opus 5.5, and Opus 5.5 fast mode, then commit, push, and reinstall. Fable 5.1 was already priced (8455ede), so this commit adds only Opus 5.5. Kept the verbatim-lookup [1m] rows instead of normalizing the suffix in main.go, to follow the existing pattern.
+
+## Actions & Verification
+Checked the rates against platform.claude.com/docs/en/about-claude/pricing on 2026-09-23. Ran go vet and go build. Ran ./ccusage-go --days 3, which completed. Pushed to origin and ran install.sh.
+
+## Errors & Mistakes
+None
+
+## Attempts & Outcomes
+None
+
+## Findings & Constraints
+Fast-mode tracking needs no code change: main.go appends ":fast" when usage.speed == "fast". The Opus 5.5 fast cache read is 8 * 0.05 = 0.40, because the docs say that the cache multipliers stack on fast mode pricing. No fast Opus 5.5 entries exist in the logs yet (all speed values are "standard").
+
+## Open Questions
+The skill notes that Opus 5.5 fast-mode docs may change after launch. Re-check the $8/$40 rate if it looks off.
