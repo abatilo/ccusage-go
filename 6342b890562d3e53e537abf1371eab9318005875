@@ -1,0 +1,17 @@
+## Intent & Decisions
+User asked whether Opus 5.5 fast-mode pricing was correct because the AllFast numbers looked wrong. The fast rates were correct; the real defect was the within-file dedup rule undercounting output tokens. Fixed it by reusing the cross-file rule (max entryTotalTokens) rather than a "last wins" rule, so one rule governs both levels.
+
+## Actions & Verification
+Added main_test.go with TestProcessFileKeepsFinalStreamedUsage. It failed before the fix (OutputTokens = 1, want 348) and passes after. go vet is clean. golangci-lint reports 4 issues, the same 4 as before this change, on untouched lines. MTD totals moved from $666.04 / $766.73 (Cost / AllFast) to $691.56 / $798.14. An independent Python recomputation over the raw JSONL gave $690.16 / $796.21 with last-wins dedup and no web-search charges, a close match. Pushed and reinstalled with install.sh.
+
+## Errors & Mistakes
+In the previous turn I reported the Opus 5.5 change as verified after only a smoke run of ./ccusage-go. I did not cross-check the totals, so I missed this undercount.
+
+## Attempts & Outcomes
+None
+
+## Findings & Constraints
+Of the 4,078 September keys, 2,942 have duplicates and 731 of those have differing usage values. The copies differ mainly in output_tokens, which grows as the stream progresses. The projections table uses only the Cost column; it never projects AllFast. Fable 5 and 5.1 have no fast tier, so AllFast leaves them at regular price. claude-sonnet-5 has no pricing row and falls back to default ($3/$15 instead of $2/$10); the effect is about $0.40 this month.
+
+## Open Questions
+Whether to add a claude-sonnet-5 pricing row, and whether the projections table should also project AllFast.
