@@ -18,6 +18,13 @@ var modelPricing = map[string]ModelPricing{
 	"claude-fable-5":     {Input: 10.0, Output: 50.0, CacheWrite: 12.50, CacheWrite1h: 20.0, CacheRead: 1.0},
 	"claude-fable-5[1m]": {Input: 10.0, Output: 50.0, CacheWrite: 12.50, CacheWrite1h: 20.0, CacheRead: 1.0},
 
+	// Opus 5.5 (2x fast mode; cache reads are 0.05x base input instead of the
+	// standard 0.1x)
+	"claude-opus-5-5":          {Input: 4.0, Output: 20.0, CacheWrite: 5.0, CacheWrite1h: 8.0, CacheRead: 0.20},
+	"claude-opus-5-5:fast":     {Input: 8.0, Output: 40.0, CacheWrite: 10.0, CacheWrite1h: 16.0, CacheRead: 0.40},
+	"claude-opus-5-5[1m]":      {Input: 4.0, Output: 20.0, CacheWrite: 5.0, CacheWrite1h: 8.0, CacheRead: 0.20},
+	"claude-opus-5-5[1m]:fast": {Input: 8.0, Output: 40.0, CacheWrite: 10.0, CacheWrite1h: 16.0, CacheRead: 0.40},
+
 	// Opus 5 (same pricing as 4.8, including 2x fast mode)
 	"claude-opus-5":      {Input: 5.0, Output: 25.0, CacheWrite: 6.25, CacheWrite1h: 10.0, CacheRead: 0.50},
 	"claude-opus-5:fast": {Input: 10.0, Output: 50.0, CacheWrite: 12.50, CacheWrite1h: 20.0, CacheRead: 1.0},
