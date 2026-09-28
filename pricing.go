@@ -7,6 +7,10 @@ var modelPricing = map[string]ModelPricing{
 	// Default pricing (used for unknown models)
 	"default": {Input: 3.0, Output: 15.0, CacheWrite: 3.75, CacheWrite1h: 6.0, CacheRead: 0.30},
 
+	// Sonnet 5.5 (no fast tier; full 1M context at standard pricing)
+	"claude-sonnet-5-5":     {Input: 2.0, Output: 10.0, CacheWrite: 2.50, CacheWrite1h: 4.0, CacheRead: 0.20},
+	"claude-sonnet-5-5[1m]": {Input: 2.0, Output: 10.0, CacheWrite: 2.50, CacheWrite1h: 4.0, CacheRead: 0.20},
+
 	// Fable 5.1 (no fast tier; cache reads are 0.025x base input instead of
 	// the standard 0.1x)
 	"claude-fable-5-1":     {Input: 10.0, Output: 50.0, CacheWrite: 12.50, CacheWrite1h: 20.0, CacheRead: 0.25},
