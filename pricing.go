@@ -11,6 +11,10 @@ var modelPricing = map[string]ModelPricing{
 	"claude-sonnet-5-5":     {Input: 2.0, Output: 10.0, CacheWrite: 2.50, CacheWrite1h: 4.0, CacheRead: 0.20},
 	"claude-sonnet-5-5[1m]": {Input: 2.0, Output: 10.0, CacheWrite: 2.50, CacheWrite1h: 4.0, CacheRead: 0.20},
 
+	// Sonnet 5 ($2/$10 became the standard price; the scheduled increase to
+	// $3/$15 was cancelled)
+	"claude-sonnet-5": {Input: 2.0, Output: 10.0, CacheWrite: 2.50, CacheWrite1h: 4.0, CacheRead: 0.20},
+
 	// Fable 5.1 (no fast tier; cache reads are 0.025x base input instead of
 	// the standard 0.1x)
 	"claude-fable-5-1":     {Input: 10.0, Output: 50.0, CacheWrite: 12.50, CacheWrite1h: 20.0, CacheRead: 0.25},
