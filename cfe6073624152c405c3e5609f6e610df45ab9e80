@@ -1,0 +1,20 @@
+## Intent & Decisions
+User asked to research the Sonnet 5.5 release, add its pricing, commit, push, then install here and on the "cw" machine. I also added claude-sonnet-5 in its own commit, because an earlier note listed it as an open question and the docs now show $2/$10 as standard.
+
+## Actions & Verification
+Read platform.claude.com/docs/en/about-claude/pricing.md on 2026-09-28: Sonnet 5.5 is $2 / $2.50 / $4 / $0.20 / $10 per MTok. Fast mode is listed only for Opus 5.5, Opus 5 and Opus 4.8. Ran go vet, go build and ./ccusage-go --days 3 (completed).
+
+## Errors & Mistakes
+None
+
+## Attempts & Outcomes
+None
+
+## Findings & Constraints
+The logs contain 340 claude-sonnet-5-5 and 128 claude-sonnet-5 entries, all speed=standard. Sonnet 5.5 cache reads use the standard 0.1x multiplier (0.20 = 2.0 * 0.1).
+
+## Relevant Files & Commits
+0ace645 and its note: Opus 5.5 pricing and the [1m] alias precedent.
+
+## Open Questions
+None
