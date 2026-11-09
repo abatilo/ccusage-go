@@ -15,6 +15,13 @@ var modelPricing = map[string]ModelPricing{
 	// $3/$15 was cancelled)
 	"claude-sonnet-5": {Input: 2.0, Output: 10.0, CacheWrite: 2.50, CacheWrite1h: 4.0, CacheRead: 0.20},
 
+	// Fable 5.2 (2x fast mode; cache reads are 0.025x base input instead of
+	// the standard 0.1x)
+	"claude-fable-5-2":          {Input: 8.0, Output: 40.0, CacheWrite: 10.0, CacheWrite1h: 16.0, CacheRead: 0.20},
+	"claude-fable-5-2:fast":     {Input: 16.0, Output: 80.0, CacheWrite: 20.0, CacheWrite1h: 32.0, CacheRead: 0.40},
+	"claude-fable-5-2[1m]":      {Input: 8.0, Output: 40.0, CacheWrite: 10.0, CacheWrite1h: 16.0, CacheRead: 0.20},
+	"claude-fable-5-2[1m]:fast": {Input: 16.0, Output: 80.0, CacheWrite: 20.0, CacheWrite1h: 32.0, CacheRead: 0.40},
+
 	// Fable 5.1 (no fast tier; cache reads are 0.025x base input instead of
 	// the standard 0.1x)
 	"claude-fable-5-1":     {Input: 10.0, Output: 50.0, CacheWrite: 12.50, CacheWrite1h: 20.0, CacheRead: 0.25},
