@@ -1,0 +1,20 @@
+## Intent & Decisions
+User stated that Fable has no fast mode and asked to remove the :fast keys added in cb13930, then build, install, commit, and push to main.
+
+## Actions & Verification
+go build, go vet, and go install succeeded; gofmt reported nothing. Pushed to main. Searched local logs for fable-5-2 entries with speed fast; result is in Findings.
+
+## Errors & Mistakes
+The body of cb13930 says usage was "overstated" by the default fallback; it was understated ($3/$15 fallback versus $8/$40). Not amended because that needs a force-push to main.
+
+## Attempts & Outcomes
+None
+
+## Findings & Constraints
+The claude-api skill's cached table (2026-11-03) says Fable 5.2 does support fast mode at $16/$80 on the Claude API. The user's statement conflicts with that and the user's choice was followed. If a fable-5-2 fast entry ever appears in logs, check how the :fast lookup falls back before trusting its cost.
+
+## Relevant Files & Commits
+cb13930 added the removed keys.
+
+## Open Questions
+Whether Claude Code ever emits fast-mode usage for claude-fable-5-2.
