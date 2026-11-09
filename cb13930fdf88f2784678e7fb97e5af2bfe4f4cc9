@@ -1,0 +1,20 @@
+## Intent & Decisions
+User asked to confirm Opus 5.5 pricing exists (it did, since 0ace645; left unchanged) and to add Fable 5.2, then build, install, commit, and push straight to main, quickly.
+
+## Actions & Verification
+go build, go vet, and go install succeeded; gofmt reported nothing. Pushed to main. No run against real logs was done.
+
+## Errors & Mistakes
+None
+
+## Attempts & Outcomes
+None
+
+## Findings & Constraints
+Source: the claude-api skill's cached model table (cached 2026-11-03), not the live pricing page. It states $8/$40, cache reads $0.20, fast mode $16/$80. Cache write values (1.25x and 2x input) and the fast-tier cache values (2x standard) are derived from the multipliers used by the other entries, not quoted from a source. [1m] keys duplicate base pricing because the 1M context is standard and lookup is verbatim.
+
+## Relevant Files & Commits
+0ace645 (Opus 5.5) is the model for the four-key fast/[1m] layout used here.
+
+## Open Questions
+Whether fast-mode cache write and cache read rates for Fable 5.2 are exactly 2x standard.
