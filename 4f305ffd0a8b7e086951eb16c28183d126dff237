@@ -1,0 +1,20 @@
+## Intent & Decisions
+User reversed the statement behind 599c898: after turning on /fast in a Fable 5.2 session, Claude Code printed "Fast mode ON · $16/$80 per Mtok". The four-key layout from cb13930 is restored unchanged.
+
+## Actions & Verification
+git revert --no-commit 599c898, then go build, go vet, and go install; gofmt reported nothing. Pushed to main. No run against real logs confirmed a fast-mode Fable 5.2 entry is priced with the :fast key.
+
+## Errors & Mistakes
+A grep of local logs for fable-5-2 entries with speed fast failed on a zsh glob error (--include=*.jsonl unquoted) and was not rerun.
+
+## Attempts & Outcomes
+None
+
+## Findings & Constraints
+$16/$80 input/output is confirmed by two sources: the /fast banner and the claude-api skill's cached table (2026-11-03). The fast-tier cache rates (write 20, 1h write 32, read 0.40) are still derived as 2x standard, not quoted from a source.
+
+## Relevant Files & Commits
+cb13930 added these keys; 599c898 removed them. main.go:550 appends :fast when usage.speed is "fast".
+
+## Open Questions
+Whether fast-mode cache write and cache read rates for Fable 5.2 are exactly 2x standard.
